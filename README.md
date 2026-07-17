@@ -179,8 +179,8 @@ Todas las opciones configurables:
 
 | Opción | Tipo | Default | Descripción |
 |--------|------|---------|-------------|
-| `model` | string | `poolside/laguna-xs-2.1:free` | Modelo LLM para resúmenes |
-| `apiBaseUrl` | string | `https://openrouter.ai/api/v1` | URL base de la API |
+| `model` | string | `big-pickle` | Modelo LLM para resúmenes |
+| `apiBaseUrl` | string | `https://opencode.ai/zen/v1` | URL base de la API |
 | `apiKey` | string | (env vars) | API key explícita |
 | `temperature` | number | `0.1` | Temperatura del modelo |
 | `maxTokens` | number | `2000` | Tokens máximos por llamada |
