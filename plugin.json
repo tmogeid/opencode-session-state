@@ -3,7 +3,7 @@
   "id": "session-state-manager",
   "name": "Session State Manager",
   "description": "Maintains an intelligent session state to preserve context across compactions, model switches, and long sessions",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "dist/index.js",
   "hooks": [
     "chat.message",

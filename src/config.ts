@@ -44,8 +44,8 @@ export interface SsmConfig {
 }
 
 const DEFAULTS: SsmConfig = {
-  model: 'poolside/laguna-xs-2.1:free',
-  apiBaseUrl: 'https://openrouter.ai/api/v1',
+  model: 'big-pickle',
+  apiBaseUrl: 'https://opencode.ai/zen/v1',
   apiKey: undefined,
   temperature: 0.1,
   maxTokens: 2000,
