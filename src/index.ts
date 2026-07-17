@@ -44,7 +44,7 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
       : undefined,
   });
   setGlobalLogger(log);
-  log.info(`SessionStateManager v1.0.2 (tech-exclusion + summarizer-fix) initializing...`);
+  log.info(`SessionStateManager v1.0.2 (tech-exclusion + summarizer-fix + json-repair) initializing...`);
   log.info(`Project: ${ctx.directory}`);
 
   // ── 3. Initialize session manager ───────────────────────────────────────

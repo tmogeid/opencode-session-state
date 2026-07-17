@@ -45,17 +45,23 @@ export async function incrementalSummarize(
   // Build the user message with previous state + new turns
   const userPrompt = buildIncrementalPrompt(prevState, newTurns);
 
-  // Call the LLM
+  // Call the LLM with retry on JSON parse failure
   try {
-    const result = await callLLM(
-      systemPrompt,
-      userPrompt,
-      config
-    );
+    let result = await callLLM(systemPrompt, userPrompt, config);
     if (!result) return null;
 
     // Parse and validate the LLM response
-    const updated = parseLLMResponse(result, prevState, config);
+    let updated = parseLLMResponse(result, prevState, config);
+
+    // If parse failed (returned {} with no fields), retry once
+    if (Object.keys(updated).length === 0 && result.trim() !== '{}') {
+      log.debug('First LLM parse failed, retrying once...');
+      result = await callLLM(systemPrompt, userPrompt, config);
+      if (result) {
+        updated = parseLLMResponse(result, prevState, config);
+      }
+    }
+
     log.info(
       `Summarizer update applied — ` +
       `episodes=${updated.episodes?.length ?? prevState.episodes.length} ` +
@@ -172,6 +178,7 @@ async function callLLM(
     ],
     temperature: config.temperature,
     max_tokens: config.maxTokens,
+    response_format: { type: 'json_object' },
   };
 
   // Try JSON mode if the model supports it
@@ -221,30 +228,79 @@ function parseLLMResponse(
     return {};
   }
 
+  // Attempt 1: direct parse
+  let parsed: Record<string, unknown> | null = null;
   try {
-    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
-
-    // Validate that we got an object
-    if (typeof parsed !== 'object' || parsed === null) {
-      log.warn('Summarizer returned non-object response');
-      return {};
-    }
-
-    // Merge episodes if present, with max episode enforcement
-    if (parsed.episodes && Array.isArray(parsed.episodes)) {
-      // Cap episodes at maxEpisodes
-      if (parsed.episodes.length > config.maxEpisodes) {
-        const sorted = parsed.episodes.sort(
-          (a: { priority?: number }, b: { priority?: number }) =>
-            (b.priority ?? 0) - (a.priority ?? 0)
-        );
-        parsed.episodes = sorted.slice(0, config.maxEpisodes);
+    parsed = JSON.parse(cleaned) as Record<string, unknown>;
+  } catch {
+    // Attempt 2: auto-repair truncated JSON (missing closing braces/brackets)
+    const repaired = autoRepairJSON(cleaned);
+    if (repaired !== cleaned) {
+      try {
+        parsed = JSON.parse(repaired) as Record<string, unknown>;
+        log.debug('Auto-repaired truncated JSON successfully');
+      } catch {
+        // Repair didn't help
       }
     }
+  }
 
-    return parsed as Partial<SessionState>;
-  } catch (err) {
-    log.warn(`Failed to parse summarizer JSON response: ${err instanceof Error ? err.message : String(err)}`);
+  if (!parsed) {
+    log.warn('Failed to parse summarizer JSON response after retry');
     return {};
   }
+
+  // Validate that we got an object
+  if (typeof parsed !== 'object' || parsed === null) {
+    log.warn('Summarizer returned non-object response');
+    return {};
+  }
+
+  // Merge episodes if present, with max episode enforcement
+  if (parsed.episodes && Array.isArray(parsed.episodes)) {
+    // Cap episodes at maxEpisodes
+    if (parsed.episodes.length > config.maxEpisodes) {
+      const sorted = parsed.episodes.sort(
+        (a: { priority?: number }, b: { priority?: number }) =>
+          (b.priority ?? 0) - (a.priority ?? 0)
+      );
+      parsed.episodes = sorted.slice(0, config.maxEpisodes);
+    }
+  }
+
+  return parsed as Partial<SessionState>;
+}
+
+/**
+ * Attempts to repair truncated JSON by closing unmatched braces and brackets.
+ */
+function autoRepairJSON(text: string): string {
+  // Count unmatched open braces and brackets
+  let braces = 0;
+  let brackets = 0;
+  let inString = false;
+  let escape = false;
+
+  for (const ch of text) {
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') braces++;
+    if (ch === '}') braces--;
+    if (ch === '[') brackets++;
+    if (ch === ']') brackets--;
+  }
+
+  // Remove trailing incomplete key/value (e.g. "..., "key": "val")
+  let repaired = text.replace(/,\s*"[^"]*"\s*:\s*"?[^"]*$/, '');
+
+  // Close any unclosed string
+  if (inString) repaired += '"';
+
+  // Close brackets first, then braces
+  while (brackets > 0) { repaired += ']'; brackets--; }
+  while (braces > 0) { repaired += '}'; braces--; }
+
+  return repaired;
 }
