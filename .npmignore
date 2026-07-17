@@ -1,0 +1,18 @@
+# Source (solo distribuimos el build)
+src/
+tsconfig.json
+
+# Dev dependencies
+node_modules/
+
+# Git
+.gitignore
+
+# Runtime data
+.session-state/
+
+# Logs
+*.log
+
+# Lock file (no necesario en tarball público)
+package-lock.json

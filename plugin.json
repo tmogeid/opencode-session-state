@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "session-state-manager",
+  "name": "Session State Manager",
+  "description": "Maintains an intelligent session state to preserve context across compactions, model switches, and long sessions",
+  "version": "1.0.2",
+  "entry": "dist/index.js",
+  "hooks": [
+    "chat.message",
+    "event",
+    "experimental.chat.system.transform",
+    "experimental.session.compacting",
+    "experimental.compaction.autocontinue"
+  ]
+}
