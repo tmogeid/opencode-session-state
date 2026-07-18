@@ -68,12 +68,10 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       }
     }
 
-    // WARN and ERROR → console.warn (goes to OpenCode logs, not TUI display)
-    if (lvl === 'warn') {
+    // ERROR → console.warn + toast (visible al usuario, merece atención)
+    // WARN → solo archivo (console.warn molesta al usuario en TUI)
+    if (lvl === 'error') {
       console.warn(`[SSM] ${line}`);
-    } else if (lvl === 'error') {
-      console.warn(`[SSM] ${line}`);
-      // Show toast for errors
       if (options.showToast) {
         options.showToast(msg.slice(0, 120), 'error');
       }
