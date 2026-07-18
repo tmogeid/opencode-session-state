@@ -8,13 +8,47 @@
  * - FALLBACK: if the LLM call fails, returns null (caller continues with heuristic state)
  */
 
-import type { SsmConfig } from './config.js';
-import type { SessionState } from './state-store.js';
-import { getLogger } from './logger.js';
+import type { SsmConfig } from "./config.js";
+import type { SessionState } from "./state-store.js";
+import { getLogger } from "./logger.js";
 
 export interface TurnData {
-  role: 'user' | 'assistant';
-  text: string;
+	role: "user" | "assistant";
+	text: string;
+}
+
+/**
+ * Global serial queue for LLM calls — prevents concurrent summarizer requests
+ * to the same provider/API key. Each call waits for the previous one to finish.
+ */
+let llmQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Wraps callLLM() inside a serial queue so summarizer calls from different
+ * sessions never run in parallel. This avoids rate-limit collisions and
+ * ensures predictable load on the LLM provider.
+ */
+async function callLLMWithQueue(
+	systemPrompt: string,
+	userPrompt: string,
+	config: SsmConfig,
+): Promise<string | null> {
+	// Capturar la promesa anterior y crear la siguiente en la cadena
+	const waitForTurn = llmQueue;
+	let releaseNext!: () => void;
+	llmQueue = new Promise<void>((r) => {
+		releaseNext = r;
+	});
+
+	// Esperar a que termine la llamada anterior
+	await waitForTurn;
+
+	try {
+		return await callLLM(systemPrompt, userPrompt, config);
+	} finally {
+		// Liberar la siguiente llamada en la cola
+		releaseNext();
+	}
 }
 
 /**
@@ -26,52 +60,54 @@ export interface TurnData {
  * @returns Updated session state, or null if the call was skipped or failed
  */
 export async function incrementalSummarize(
-  prevState: SessionState,
-  newTurns: TurnData[],
-  config: SsmConfig
+	prevState: SessionState,
+	newTurns: TurnData[],
+	config: SsmConfig,
 ): Promise<Partial<SessionState> | null> {
-  const log = getLogger();
+	const log = getLogger();
 
-  // Guard: nothing to summarize
-  if (newTurns.length === 0) return null;
+	// Guard: nothing to summarize
+	if (newTurns.length === 0) return null;
 
-  // Guard: trivial messages (greetings, single words)
-  const allText = newTurns.map((t) => t.text).join(' ');
-  if (allText.length < 30) return null;
+	// Guard: trivial messages (greetings, single words)
+	const allText = newTurns.map((t) => t.text).join(" ");
+	if (allText.length < 30) return null;
 
-  // Build the system prompt for the summarizer LLM
-  const systemPrompt = buildSummarizerSystemPrompt(config);
+	// Build the system prompt for the summarizer LLM
+	const systemPrompt = buildSummarizerSystemPrompt(config);
 
-  // Build the user message with previous state + new turns
-  const userPrompt = buildIncrementalPrompt(prevState, newTurns);
+	// Build the user message with previous state + new turns
+	const userPrompt = buildIncrementalPrompt(prevState, newTurns);
 
-  // Call the LLM with retry on JSON parse failure
-  try {
-    let result = await callLLM(systemPrompt, userPrompt, config);
-    if (!result) return null;
+	// Call the LLM with retry on JSON parse failure
+	try {
+		let result = await callLLMWithQueue(systemPrompt, userPrompt, config);
+		if (!result) return null;
 
-    // Parse and validate the LLM response
-    let updated = parseLLMResponse(result, prevState, config);
+		// Parse and validate the LLM response
+		let updated = parseLLMResponse(result, prevState, config);
 
-    // If parse failed (returned {} with no fields), retry once
-    if (Object.keys(updated).length === 0 && result.trim() !== '{}') {
-      log.debug('First LLM parse failed, retrying once...');
-      result = await callLLM(systemPrompt, userPrompt, config);
-      if (result) {
-        updated = parseLLMResponse(result, prevState, config);
-      }
-    }
+		// If parse failed (returned {} with no fields), retry once
+		if (Object.keys(updated).length === 0 && result.trim() !== "{}") {
+			log.debug("First LLM parse failed, retrying once...");
+			result = await callLLMWithQueue(systemPrompt, userPrompt, config);
+			if (result) {
+				updated = parseLLMResponse(result, prevState, config);
+			}
+		}
 
-    log.info(
-      `Summarizer update applied — ` +
-      `episodes=${updated.episodes?.length ?? prevState.episodes.length} ` +
-      `decisions=${updated.decisions?.length ?? prevState.decisions.length}`
-    );
-    return updated;
-  } catch (err) {
-    log.warn(`Summarizer LLM call failed: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
-  }
+		log.info(
+			`Summarizer update applied — ` +
+				`episodes=${updated.episodes?.length ?? prevState.episodes.length} ` +
+				`decisions=${updated.decisions?.length ?? prevState.decisions.length}`,
+		);
+		return updated;
+	} catch (err) {
+		log.warn(
+			`Summarizer LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+		);
+		return null;
+	}
 }
 
 /**
@@ -79,7 +115,7 @@ export async function incrementalSummarize(
  * Instructs the model to do incremental, structured updates.
  */
 function buildSummarizerSystemPrompt(config: SsmConfig): string {
-  return `Eres un extractor de estado de sesión para OpenCode. Tu función es ÚNICAMENTE ACTUALIZAR un estado existente basándote en NUEVOS mensajes — NUNCA resumas la conversación completa.
+	return `Eres un extractor de estado de sesión para OpenCode. Tu función es ÚNICAMENTE ACTUALIZAR un estado existente basándote en NUEVOS mensajes — NUNCA resumas la conversación completa.
 
 ## REGLAS ESTRICTAS
 
@@ -115,14 +151,14 @@ Campos posibles:
  * Builds the incremental user prompt with previous state + new turns.
  */
 function buildIncrementalPrompt(
-  prevState: SessionState,
-  newTurns: TurnData[]
+	prevState: SessionState,
+	newTurns: TurnData[],
 ): string {
-  const turnsText = newTurns
-    .map((t) => `<${t.role}>\n${cleanContent(t.text)}\n</${t.role}>`)
-    .join('\n\n');
+	const turnsText = newTurns
+		.map((t) => `<${t.role}>\n${cleanContent(t.text)}\n</${t.role}>`)
+		.join("\n\n");
 
-  return `## Estado Anterior (NO modificar a menos que los nuevos mensajes lo contradigan)
+	return `## Estado Anterior (NO modificar a menos que los nuevos mensajes lo contradigan)
 
 \`\`\`json
 ${JSON.stringify(prevState, null, 2)}
@@ -144,66 +180,68 @@ Responde SOLO con JSON.`;
  * Cleans message content by removing common noise.
  */
 function cleanContent(text: string): string {
-  return text
-    // Remove code blocks (they are too long)
-    .replace(/```[\s\S]*?```/g, '[código omitido]')
-    // Remove terminal output blocks
-    .replace(/`[\s\S]*?`/g, '[output omitido]')
-    // Truncate very long lines
-    .split('\n')
-    .map((line) => (line.length > 200 ? line.slice(0, 200) + '...' : line))
-    .join('\n')
-    // Limit total length
-    .slice(0, 4000);
+	return (
+		text
+			// Remove code blocks (they are too long)
+			.replace(/```[\s\S]*?```/g, "[código omitido]")
+			// Remove terminal output blocks
+			.replace(/`[\s\S]*?`/g, "[output omitido]")
+			// Truncate very long lines
+			.split("\n")
+			.map((line) => (line.length > 200 ? line.slice(0, 200) + "..." : line))
+			.join("\n")
+			// Limit total length
+			.slice(0, 4000)
+	);
 }
 
 /**
  * Calls the LLM API (OpenAI-compatible) and returns the raw response text.
  */
 async function callLLM(
-  systemPrompt: string,
-  userPrompt: string,
-  config: SsmConfig
+	systemPrompt: string,
+	userPrompt: string,
+	config: SsmConfig,
 ): Promise<string | null> {
-  const apiKey = config.apiKey;
-  if (!apiKey) return null;
+	const apiKey = config.apiKey;
+	if (!apiKey) return null;
 
-  const url = `${config.apiBaseUrl.replace(/\/+$/, '')}/chat/completions`;
+	const url = `${config.apiBaseUrl.replace(/\/+$/, "")}/chat/completions`;
 
-  const body: Record<string, unknown> = {
-    model: config.model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: config.temperature,
-    max_tokens: config.maxTokens,
-    response_format: { type: 'json_object' },
-  };
+	const body: Record<string, unknown> = {
+		model: config.model,
+		messages: [
+			{ role: "system", content: systemPrompt },
+			{ role: "user", content: userPrompt },
+		],
+		temperature: config.temperature,
+		max_tokens: config.maxTokens,
+		response_format: { type: "json_object" },
+	};
 
-  // Try JSON mode if the model supports it
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000),
-  });
+	// Try JSON mode if the model supports it
+	const response = await fetch(url, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(60000),
+	});
 
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => 'unknown');
-    throw new Error(`LLM API ${response.status}: ${errBody.slice(0, 300)}`);
-  }
+	if (!response.ok) {
+		const errBody = await response.text().catch(() => "unknown");
+		throw new Error(`LLM API ${response.status}: ${errBody.slice(0, 300)}`);
+	}
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Empty LLM response');
+	const data = (await response.json()) as {
+		choices?: Array<{ message?: { content?: string } }>;
+	};
+	const content = data.choices?.[0]?.message?.content;
+	if (!content) throw new Error("Empty LLM response");
 
-  return content;
+	return content;
 }
 
 /**
@@ -211,96 +249,111 @@ async function callLLM(
  * Handles partial JSON, malformed responses, and empty updates gracefully.
  */
 function parseLLMResponse(
-  raw: string,
-  prevState: SessionState,
-  config: SsmConfig
+	raw: string,
+	prevState: SessionState,
+	config: SsmConfig,
 ): Partial<SessionState> {
-  const log = getLogger();
+	const log = getLogger();
 
-  // Strip markdown code fences if present
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
+	// Strip markdown code fences if present
+	const cleaned = raw
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```$/i, "")
+		.trim();
 
-  if (!cleaned || cleaned === '{}') {
-    log.debug('Summarizer returned empty update');
-    return {};
-  }
+	if (!cleaned || cleaned === "{}") {
+		log.debug("Summarizer returned empty update");
+		return {};
+	}
 
-  // Attempt 1: direct parse
-  let parsed: Record<string, unknown> | null = null;
-  try {
-    parsed = JSON.parse(cleaned) as Record<string, unknown>;
-  } catch {
-    // Attempt 2: auto-repair truncated JSON (missing closing braces/brackets)
-    const repaired = autoRepairJSON(cleaned);
-    if (repaired !== cleaned) {
-      try {
-        parsed = JSON.parse(repaired) as Record<string, unknown>;
-        log.debug('Auto-repaired truncated JSON successfully');
-      } catch {
-        // Repair didn't help
-      }
-    }
-  }
+	// Attempt 1: direct parse
+	let parsed: Record<string, unknown> | null = null;
+	try {
+		parsed = JSON.parse(cleaned) as Record<string, unknown>;
+	} catch {
+		// Attempt 2: auto-repair truncated JSON (missing closing braces/brackets)
+		const repaired = autoRepairJSON(cleaned);
+		if (repaired !== cleaned) {
+			try {
+				parsed = JSON.parse(repaired) as Record<string, unknown>;
+				log.debug("Auto-repaired truncated JSON successfully");
+			} catch {
+				// Repair didn't help
+			}
+		}
+	}
 
-  if (!parsed) {
-    log.warn('Failed to parse summarizer JSON response after retry');
-    return {};
-  }
+	if (!parsed) {
+		log.warn("Failed to parse summarizer JSON response after retry");
+		return {};
+	}
 
-  // Validate that we got an object
-  if (typeof parsed !== 'object' || parsed === null) {
-    log.warn('Summarizer returned non-object response');
-    return {};
-  }
+	// Validate that we got an object
+	if (typeof parsed !== "object" || parsed === null) {
+		log.warn("Summarizer returned non-object response");
+		return {};
+	}
 
-  // Merge episodes if present, with max episode enforcement
-  if (parsed.episodes && Array.isArray(parsed.episodes)) {
-    // Cap episodes at maxEpisodes
-    if (parsed.episodes.length > config.maxEpisodes) {
-      const sorted = parsed.episodes.sort(
-        (a: { priority?: number }, b: { priority?: number }) =>
-          (b.priority ?? 0) - (a.priority ?? 0)
-      );
-      parsed.episodes = sorted.slice(0, config.maxEpisodes);
-    }
-  }
+	// Merge episodes if present, with max episode enforcement
+	if (parsed.episodes && Array.isArray(parsed.episodes)) {
+		// Cap episodes at maxEpisodes
+		if (parsed.episodes.length > config.maxEpisodes) {
+			const sorted = parsed.episodes.sort(
+				(a: { priority?: number }, b: { priority?: number }) =>
+					(b.priority ?? 0) - (a.priority ?? 0),
+			);
+			parsed.episodes = sorted.slice(0, config.maxEpisodes);
+		}
+	}
 
-  return parsed as Partial<SessionState>;
+	return parsed as Partial<SessionState>;
 }
 
 /**
  * Attempts to repair truncated JSON by closing unmatched braces and brackets.
  */
 function autoRepairJSON(text: string): string {
-  // Count unmatched open braces and brackets
-  let braces = 0;
-  let brackets = 0;
-  let inString = false;
-  let escape = false;
+	// Count unmatched open braces and brackets
+	let braces = 0;
+	let brackets = 0;
+	let inString = false;
+	let isEscaping = false;
 
-  for (const ch of text) {
-    if (escape) { escape = false; continue; }
-    if (ch === '\\') { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') braces++;
-    if (ch === '}') braces--;
-    if (ch === '[') brackets++;
-    if (ch === ']') brackets--;
-  }
+	for (const ch of text) {
+		if (isEscaping) {
+			isEscaping = false;
+			continue;
+		}
+		if (ch === "\\") {
+			isEscaping = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === "{") braces++;
+		if (ch === "}") braces--;
+		if (ch === "[") brackets++;
+		if (ch === "]") brackets--;
+	}
 
-  // Remove trailing incomplete key/value (e.g. "..., "key": "val")
-  let repaired = text.replace(/,\s*"[^"]*"\s*:\s*"?[^"]*$/, '');
+	// Remove trailing incomplete key/value (e.g. "..., "key": "val")
+	let repaired = text.replace(/,\s*"[^"]*"\s*:\s*"?[^"]*$/, "");
 
-  // Close any unclosed string
-  if (inString) repaired += '"';
+	// Close any unclosed string
+	if (inString) repaired += '"';
 
-  // Close brackets first, then braces
-  while (brackets > 0) { repaired += ']'; brackets--; }
-  while (braces > 0) { repaired += '}'; braces--; }
+	// Close brackets first, then braces
+	while (brackets > 0) {
+		repaired += "]";
+		brackets--;
+	}
+	while (braces > 0) {
+		repaired += "}";
+		braces--;
+	}
 
-  return repaired;
+	return repaired;
 }
