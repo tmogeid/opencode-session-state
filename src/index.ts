@@ -89,7 +89,7 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 
 				// Extract text from message parts — safe at runtime
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				const text = (output.parts as any[])
+				const text = ((output.parts ?? []) as any[])
 					.filter(
 						(p: { type: string }) =>
 							p.type === "text" || p.type === "tool_result",
