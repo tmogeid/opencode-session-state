@@ -31,12 +31,13 @@ Añade el plugin a tu `opencode.json` (global en `~/.config/opencode/opencode.js
 ```json
 {
   "plugin": [
-    ["opencode-session-state", {
-      "model": "big-pickle",
-      "apiBaseUrl": "https://opencode.ai/zen/v1",
-      "temperature": 0.1,
-      "logging": "info"
-    }]
+    [
+      "opencode-session-state",
+      {
+        "temperature": 0.1,
+        "logging": "info"
+      }
+    ]
   ]
 }
 ```
@@ -67,12 +68,13 @@ Enlaza en `opencode.json` con la ruta absoluta al `dist/index.js`:
 ```json
 {
   "plugin": [
-    ["/ruta/absoluta/a/opencode-session-state/dist/index.js", {
-      "model": "big-pickle",
-      "apiBaseUrl": "https://opencode.ai/zen/v1",
-      "temperature": 0.1,
-      "logging": "info"
-    }]
+    [
+      "/ruta/absoluta/a/opencode-session-state/dist/index.js",
+      {
+        "temperature": 0.1,
+        "logging": "info"
+      }
+    ]
   ]
 }
 ```
@@ -89,87 +91,58 @@ Copy-Item commands\session-state.md $env:USERPROFILE\.config\opencode\commands\
 
 Reinicia OpenCode.
 
-## Modelos recomendados
+## Modelo predeterminado
 
-El plugin usa un LLM para resumir incrementalmente la conversación. Hay dos opciones recomendadas:
+El plugin usa un LLM para resumir incrementalmente la conversación. El modelo por defecto es:
 
-### Big Pickle en OpenCode Zen (recomendado)
+### meta/llama-3.1-8b-instruct (NVIDIA)
 
-- **Model ID**: `big-pickle`
-- **Endpoint**: `https://opencode.ai/zen/v1`
-- **Precio**: Gratis (stealth model, tiempo limitado)
+- **Model ID**: `meta/llama-3.1-8b-instruct`
+- **Endpoint**: `https://integrate.api.nvidia.com/v1`
+- **Precio**: Gratis (NVIDIA build.nvidia.com free tier)
 - **Cómo obtener la API key**:
-  1. Visita [opencode.ai/auth](https://opencode.ai/auth)
-  2. Inicia sesión y crea una API key
-  3. La key tendrá formato `sk-...`
+  1. Visita [build.nvidia.com](https://build.nvidia.com)
+  2. Inicia sesión y genera una API key
+  3. La key tendrá formato `nvapi-...`
   4. Configúrala como variable de entorno:
 
 ```bash
 # Linux/macOS:
-export OPENCODE_ZEN_API_KEY=sk-...
+export NVIDIA_API_KEY=nvapi-...
 
 # Windows (PowerShell sesión actual):
-$env:OPENCODE_ZEN_API_KEY='sk-...'
+$env:NVIDIA_API_KEY='nvapi-...'
 
 # Windows (persistente):
-[Environment]::SetEnvironmentVariable('OPENCODE_ZEN_API_KEY', 'sk-...', 'User')
+[Environment]::SetEnvironmentVariable('NVIDIA_API_KEY', 'nvapi-...', 'User')
 ```
 
-- **Privacidad**: Durante el periodo free, los datos pueden usarse para mejorar el modelo
+**No necesitas configurar `model` ni `apiBaseUrl`** — el plugin funciona out-of-the-box con la variable de entorno configurada.
 
-Configuración de ejemplo:
+Configuración mínima:
 
 ```json
 {
   "plugin": [
-    ["opencode-session-state", {
-      "model": "big-pickle",
-      "apiBaseUrl": "https://opencode.ai/zen/v1"
-    }]
+    [
+      "opencode-session-state",
+      {
+        "temperature": 0.1,
+        "logging": "info"
+      }
+    ]
   ]
 }
 ```
-
-### poolside/laguna-xs-2.1:free en OpenRouter (alternativa)
-
-- **Model ID**: `poolside/laguna-xs-2.1:free`
-- **Endpoint**: `https://openrouter.ai/api/v1`
-- **Precio**: Gratis (OpenRouter free tier)
-- **Cómo obtener la API key**:
-  1. Visita [openrouter.ai/keys](https://openrouter.ai/keys)
-  2. Crea una cuenta y genera una API key
-  3. Configúrala: `export OPENROUTER_API_KEY=sk-or-...`
-
-```json
-{
-  "plugin": [
-    ["opencode-session-state", {
-      "model": "poolside/laguna-xs-2.1:free",
-      "apiBaseUrl": "https://openrouter.ai/api/v1"
-    }]
-  ]
-}
-```
-
-### Comparativa
-
-| Característica | Big Pickle (Zen) | poolside (OpenRouter) |
-|----------------|------------------|------------------------|
-| Precio | Gratis (limitado) | Gratis (free tier) |
-| Default v1.0.2 | No | Sí |
-| Default v1.0.3+ | Sí | No |
-| Env var | `OPENCODE_ZEN_API_KEY` | `OPENROUTER_API_KEY` |
-| Optimizado para coding | Sí (stealth model) | Sí |
 
 ## API Key
 
 El plugin busca la API key en este orden:
 
 1. `apiKey` explícita en la config del plugin
-2. `OPENROUTER_API_KEY` (env var)
-3. `OPENCODE_ZEN_API_KEY` (env var)
-4. `NVIDIA_API_KEY` (env var, legacy)
-5. `OPENAI_API_KEY` (env var, fallback)
+2. `NVIDIA_API_KEY` (env var, RECOMENDADA)
+3. `OPENROUTER_API_KEY` (env var, alternativa)
+4. `OPENAI_API_KEY` (env var, fallback)
 
 Mejor usar env vars que pasar la key directamente en la config (por seguridad).
 
@@ -177,20 +150,20 @@ Mejor usar env vars que pasar la key directamente en la config (por seguridad).
 
 Todas las opciones configurables:
 
-| Opción | Tipo | Default | Descripción |
-|--------|------|---------|-------------|
-| `model` | string | `big-pickle` | Modelo LLM para resúmenes |
-| `apiBaseUrl` | string | `https://opencode.ai/zen/v1` | URL base de la API |
-| `apiKey` | string | (env vars) | API key explícita |
-| `temperature` | number | `0.1` | Temperatura del modelo |
-| `maxTokens` | number | `2000` | Tokens máximos por llamada |
-| `maxEpisodes` | number | `4` | Máximo de episodios |
-| `maxStateTokens` | number | `5000` | Máximo tokens del estado |
-| `logging` | string | `info` | Nivel: `debug`, `info`, `warn`, `error` |
-| `storageDir` | string | `.session-state` | Directorio para archivos |
-| `injection` | boolean | `true` | Inyectar estado en system prompt |
-| `autoSummary` | boolean | `true` | Resumen automático via LLM |
-| `summarizerInterval` | number | `30000` | Intervalo mínimo (ms) |
+| Opción               | Tipo    | Default                               | Descripción                             |
+| -------------------- | ------- | ------------------------------------- | --------------------------------------- |
+| `model`              | string  | `meta/llama-3.1-8b-instruct`          | Modelo LLM para resúmenes               |
+| `apiBaseUrl`         | string  | `https://integrate.api.nvidia.com/v1` | URL base de la API                      |
+| `apiKey`             | string  | (env vars)                            | API key explícita                       |
+| `temperature`        | number  | `0.1`                                 | Temperatura del modelo                  |
+| `maxTokens`          | number  | `2000`                                | Tokens máximos por llamada              |
+| `maxEpisodes`        | number  | `4`                                   | Máximo de episodios                     |
+| `maxStateTokens`     | number  | `5000`                                | Máximo tokens del estado                |
+| `logging`            | string  | `info`                                | Nivel: `debug`, `info`, `warn`, `error` |
+| `storageDir`         | string  | `.session-state`                      | Directorio para archivos                |
+| `injection`          | boolean | `true`                                | Inyectar estado en system prompt        |
+| `autoSummary`        | boolean | `true`                                | Resumen automático via LLM              |
+| `summarizerInterval` | number  | `30000`                               | Intervalo mínimo (ms)                   |
 
 ## Cómo funciona
 
@@ -215,28 +188,28 @@ Antes de cada prompt → system.transform hook:
 
 Archivos JSON individuales en `.session-state/<sessionId>.json`:
 
-| Campo | Descripción |
-|-------|-------------|
-| `currentTask` | Tarea actual detectada |
-| `currentObjective` | Objetivo actual |
-| `mainTopic` | Tema principal del episodio |
-| `episodes[]` | Lista de episodios |
-| `decisions[]` | Decisiones tomadas |
-| `pendingTasks[]` | Tareas pendientes |
-| `importantFiles[]` | Archivos mencionados |
-| `knownErrors[]` | Errores conocidos |
-| `risks[]` | Riesgos identificados |
-| `nextSteps[]` | Próximos pasos |
-| `conclusions[]` | Conclusiones |
+| Campo              | Descripción                 |
+| ------------------ | --------------------------- |
+| `currentTask`      | Tarea actual detectada      |
+| `currentObjective` | Objetivo actual             |
+| `mainTopic`        | Tema principal del episodio |
+| `episodes[]`       | Lista de episodios          |
+| `decisions[]`      | Decisiones tomadas          |
+| `pendingTasks[]`   | Tareas pendientes           |
+| `importantFiles[]` | Archivos mencionados        |
+| `knownErrors[]`    | Errores conocidos           |
+| `risks[]`          | Riesgos identificados       |
+| `nextSteps[]`      | Próximos pasos              |
+| `conclusions[]`    | Conclusiones                |
 
 ## Herramienta `session_state`
 
-| Acción | Descripción |
-|--------|-------------|
-| `ver` (default) | Estado completo formateado |
-| `resumen` | Episodio activo actual |
-| `episodios` | Lista de todos los episodios |
-| `limpiar` | Eliminar sesiones archivadas >30 días |
+| Acción          | Descripción                           |
+| --------------- | ------------------------------------- |
+| `ver` (default) | Estado completo formateado            |
+| `resumen`       | Episodio activo actual                |
+| `episodios`     | Lista de todos los episodios          |
+| `limpiar`       | Eliminar sesiones archivadas >30 días |
 
 ## Logs
 
@@ -248,13 +221,13 @@ Los logs van a `.session-state/logs/<YYYY-MM-DD>.log`:
 
 ## Hooks de OpenCode
 
-| Hook | Propósito |
-|------|-----------|
-| `tool` | Herramienta `session_state` |
-| `chat.message` | Mensajes del usuario |
-| `event` | Lifecycle de sesiones |
-| `experimental.chat.system.transform` | Inyectar estado |
-| `experimental.session.compacting` | Preservar en compactación |
+| Hook                                   | Propósito                   |
+| -------------------------------------- | --------------------------- |
+| `tool`                                 | Herramienta `session_state` |
+| `chat.message`                         | Mensajes del usuario        |
+| `event`                                | Lifecycle de sesiones       |
+| `experimental.chat.system.transform`   | Inyectar estado             |
+| `experimental.session.compacting`      | Preservar en compactación   |
 | `experimental.compaction.autocontinue` | Continuar post-compactación |
 
 ## Arquitectura del código

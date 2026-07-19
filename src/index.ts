@@ -53,7 +53,7 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 	});
 	setGlobalLogger(log);
 	log.info(
-		`SessionStateManager v1.0.3 (big-pickle default + json-repair) initializing...`,
+		`SessionStateManager v1.1.0 (NVIDIA Llama 3.1 8B default + json-repair) initializing...`,
 	);
 	log.info(`Project: ${ctx.directory}`);
 
