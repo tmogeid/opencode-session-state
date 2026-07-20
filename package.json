@@ -1,65 +1,65 @@
 {
-	"name": "opencode-session-state",
-	"version": "1.1.0",
-	"description": "Intelligent session state manager for OpenCode — preserves context across compactions, model switches, and long sessions",
-	"type": "module",
-	"main": "dist/index.js",
-	"types": "dist/index.d.ts",
-	"files": [
-		"dist",
-		"commands",
-		"plugin.json"
-	],
-	"scripts": {
-		"build": "tsc",
-		"dev": "tsc --watch",
-		"typecheck": "tsc --noEmit",
-		"prepublishOnly": "npm run build"
-	},
-	"keywords": [
-		"opencode",
-		"plugin",
-		"session",
-		"state",
-		"context",
-		"compaction",
-		"llm",
-		"context-management",
-		"summarization",
-		"nvidia",
-		"llama",
-		"meta-llama",
-		"developer-tools"
-	],
-	"author": "tmogeid",
-	"license": "GPL-3.0",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/tmogeid/opencode-session-state.git"
-	},
-	"homepage": "https://github.com/tmogeid/opencode-session-state#readme",
-	"bugs": {
-		"url": "https://github.com/tmogeid/opencode-session-state/issues"
-	},
-	"engines": {
-		"node": ">=18"
-	},
-	"peerDependencies": {
-		"@opencode-ai/plugin": "*"
-	},
-	"devDependencies": {
-		"@opencode-ai/plugin": "^1.18.3",
-		"@types/node": "^26.1.1",
-		"typescript": "^5.9.3"
-	},
-	"opencode": {
-		"type": "plugin",
-		"hooks": [
-			"event",
-			"chat.message",
-			"experimental.chat.system.transform",
-			"experimental.session.compacting",
-			"experimental.compaction.autocontinue"
-		]
-	}
+  "name": "opencode-session-state",
+  "version": "1.1.1",
+  "description": "Intelligent session state manager for OpenCode — preserves context across compactions, model switches, and long sessions",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "commands",
+    "plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "session",
+    "state",
+    "context",
+    "compaction",
+    "llm",
+    "context-management",
+    "summarization",
+    "nvidia",
+    "llama",
+    "meta-llama",
+    "developer-tools"
+  ],
+  "author": "tmogeid",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tmogeid/opencode-session-state.git"
+  },
+  "homepage": "https://github.com/tmogeid/opencode-session-state#readme",
+  "bugs": {
+    "url": "https://github.com/tmogeid/opencode-session-state/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.3",
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.3"
+  },
+  "opencode": {
+    "type": "plugin",
+    "hooks": [
+      "event",
+      "chat.message",
+      "experimental.chat.system.transform",
+      "experimental.session.compacting",
+      "experimental.compaction.autocontinue"
+    ]
+  }
 }

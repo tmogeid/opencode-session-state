@@ -8,8 +8,8 @@
  * 3. File-based: switch to a completely different file/area
  */
 
-import type { Episode, SessionState } from './state-store.js';
-import { getLogger } from './logger.js';
+import type { Episode, SessionState } from "./state-store.js";
+import { getLogger } from "./logger.js";
 
 /** Patterns that explicitly signal a topic change */
 const TOPIC_CHANGE_PATTERNS: RegExp[] = [
@@ -42,11 +42,12 @@ const TASK_CHANGE_PATTERNS: RegExp[] = [
 const FILE_PATTERN = /(?:^|[\s`'/(\\])([\w./\\-]+\.\w+)/g;
 
 /** Technology/product names that look like files but aren't */
-const TECH_EXCLUSIONS = /^(Node|React|Vue|Angular|Next|Nuxt|Vite|Astro|Svelte|Solid|Bun|Deno|Express|Koa|Fastify|jQuery|Lodash|Axios|TypeScript|JavaScript|ESLint|Prettier|Webpack|Rollup|Turbopack|PostCSS|Babel|Tailwind|Prisma|Supabase|Firebase|Docker|Kubernetes|Terraform|Ansible|Webpack|Vitest|Jest|Mocha|Cypress|Playwright|Storybook|Chromatic|Stripe|GraphQL|Apollo|Relay|Redux|Zustand|Jotai|XState|Zod|Yup)\.\w+$/i;
+const TECH_EXCLUSIONS =
+  /^(Node|React|Vue|Angular|Next|Nuxt|Vite|Astro|Svelte|Solid|Bun|Deno|Express|Koa|Fastify|jQuery|Lodash|Axios|TypeScript|JavaScript|ESLint|Prettier|Webpack|Rollup|Turbopack|PostCSS|Babel|Tailwind|Prisma|Supabase|Firebase|Docker|Kubernetes|Terraform|Ansible|Webpack|Vitest|Jest|Mocha|Cypress|Playwright|Storybook|Chromatic|Stripe|GraphQL|Apollo|Relay|Redux|Zustand|Jotai|XState|Zod|Yup)\.\w+$/i;
 
 export interface TopicChangeResult {
   detected: boolean;
-  type: 'topic_change' | 'task_change' | 'file_change' | null;
+  type: "topic_change" | "task_change" | "file_change" | null;
   confidence: number;
   newTopic?: string;
   newTask?: string;
@@ -64,7 +65,7 @@ export interface TopicChangeResult {
 export function detectTopicChange(
   newMessage: string,
   activeEpisode: Episode,
-  importantFiles: Array<{ path: string; reason: string }>
+  importantFiles: Array<{ path: string; reason: string }>,
 ): TopicChangeResult {
   const log = getLogger();
 
@@ -75,7 +76,7 @@ export function detectTopicChange(
       log.debug(`Topic change detected via pattern: "${match[0]}"`);
       return {
         detected: true,
-        type: 'topic_change',
+        type: "topic_change",
         confidence: 0.8,
         newTopic: extractNewTopic(newMessage),
       };
@@ -89,7 +90,7 @@ export function detectTopicChange(
       log.debug(`Task change detected: "${match[0]}"`);
       return {
         detected: true,
-        type: 'task_change',
+        type: "task_change",
         confidence: 0.7,
         newTask: match[2] || extractNewTopic(newMessage),
       };
@@ -97,21 +98,26 @@ export function detectTopicChange(
   }
 
   // 3. Check file change (completely different file from current set)
-  const fileMatch = newMessage.match(FILE_PATTERN);
-  if (fileMatch && importantFiles.length > 0) {
-    const mentionedFile = fileMatch[1].replace(/[`']/g, '');
-    // Skip technology names and very short matches
-    if (TECH_EXCLUSIONS.test(mentionedFile) || mentionedFile.length < 3) {
-      // not a real file
-    } else {
-      const isNewFile = !importantFiles.some((f) =>
-        f.path.includes(mentionedFile) || mentionedFile.includes(f.path)
+  if (importantFiles.length > 0) {
+    const fileMatches = newMessage.matchAll(FILE_PATTERN);
+    for (const fileMatch of fileMatches) {
+      const mentionedFile = fileMatch[1].replace(/[`']/g, "");
+      // Skip technology names and very short matches
+      if (TECH_EXCLUSIONS.test(mentionedFile) || mentionedFile.length < 3) {
+        continue;
+      }
+      const isNewFile = !importantFiles.some(
+        (f) => f.path.includes(mentionedFile) || mentionedFile.includes(f.path),
       );
-      if (isNewFile && !newMessage.toLowerCase().includes('mismo') && !newMessage.toLowerCase().includes('continu')) {
+      if (
+        isNewFile &&
+        !newMessage.toLowerCase().includes("mismo") &&
+        !newMessage.toLowerCase().includes("continu")
+      ) {
         log.debug(`New file detected: ${mentionedFile}`);
         return {
           detected: true,
-          type: 'file_change',
+          type: "file_change",
           confidence: 0.5,
           newFile: mentionedFile,
         };
@@ -137,7 +143,7 @@ export function detectTopicChange(
 export function applyTopicChange(
   state: SessionState,
   detection: TopicChangeResult,
-  _messages: string[]
+  _messages: string[],
 ): SessionState {
   const log = getLogger();
 
@@ -155,11 +161,15 @@ export function applyTopicChange(
 
   const newEpisode: Episode = {
     id: epId,
-    title: detection.newTask || detection.newTopic || detection.newFile || `Episodio ${episodeCounter}`,
-    topic: detection.newTopic || detection.newTask || '',
+    title:
+      detection.newTask ||
+      detection.newTopic ||
+      detection.newFile ||
+      `Episodio ${episodeCounter}`,
+    topic: detection.newTopic || detection.newTask || "",
     startedAt: now,
     endedAt: null,
-    summary: '',
+    summary: "",
     priority: state.episodes.length, // Newest has highest priority number
   };
 
@@ -178,7 +188,10 @@ export function applyTopicChange(
  * @param state - Current session state
  * @param maxEpisodes - Maximum number of episodes to keep
  */
-export function compressOldEpisodes(state: SessionState, maxEpisodes: number): void {
+export function compressOldEpisodes(
+  state: SessionState,
+  maxEpisodes: number,
+): void {
   if (state.episodes.length <= maxEpisodes) return;
 
   const log = getLogger();
@@ -205,8 +218,8 @@ let episodeCounter = 0;
 function extractNewTopic(message: string): string | undefined {
   // Try to extract a meaningful topic from the message
   const clean = message
-    .replace(/^(vamos a|ahora|pasemos a|cambiando a|nuevo|siguiente)\s*/i, '')
-    .replace(/[:.!,;].*$/, '')
+    .replace(/^(vamos a|ahora|pasemos a|cambiando a|nuevo|siguiente)\s*/i, "")
+    .replace(/[:.!,;].*$/, "")
     .trim();
   return clean.length > 3 ? clean.slice(0, 80) : undefined;
 }
