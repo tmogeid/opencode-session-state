@@ -11,16 +11,8 @@
  */
 
 import type { SsmConfig } from "./config.js";
-import {
-	StateStore,
-	type SessionState,
-	createEmptyState,
-} from "./state-store.js";
-import {
-	detectTopicChange,
-	applyTopicChange,
-	compressOldEpisodes,
-} from "./episode-detector.js";
+import { StateStore, type SessionState, createEmptyState } from "./state-store.js";
+import { detectTopicChange, applyTopicChange, compressOldEpisodes } from "./episode-detector.js";
 import { incrementalSummarize, type TurnData } from "./summarizer.js";
 import { getLogger } from "./logger.js";
 
@@ -137,11 +129,7 @@ export class SessionManager {
 		// Detect topic change
 		const activeEp = state.episodes.find((e) => e.id === state.activeEpisodeId);
 		if (activeEp) {
-			const detection = detectTopicChange(
-				cleanText,
-				activeEp,
-				state.importantFiles,
-			);
+			const detection = detectTopicChange(cleanText, activeEp, state.importantFiles);
 			if (detection.detected && detection.confidence >= 0.5) {
 				applyTopicChange(state, detection, [cleanText]);
 				// Persist immediately on topic change
@@ -162,10 +150,7 @@ export class SessionManager {
 	/**
 	 * Processes a new assistant response: captures conclusions and next steps.
 	 */
-	async processAssistantResponse(
-		sessionId: string,
-		text: string,
-	): Promise<void> {
+	async processAssistantResponse(sessionId: string, text: string): Promise<void> {
 		const live = this.sessions.get(sessionId);
 		if (!live) return;
 
@@ -260,11 +245,7 @@ export class SessionManager {
 		);
 
 		try {
-			const result = await incrementalSummarize(
-				state,
-				turnsSnapshot,
-				this.config,
-			);
+			const result = await incrementalSummarize(state, turnsSnapshot, this.config);
 
 			if (result) {
 				this.mergeStateUpdate(state, result);
@@ -285,9 +266,7 @@ export class SessionManager {
 			live.lastSummarizerCall = now;
 			await this.persist(sessionId, state);
 		} catch (err) {
-			log.warn(
-				`Summarizer error: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			log.warn(`Summarizer error: ${err instanceof Error ? err.message : String(err)}`);
 			// Don't clear pending turns on failure — retry next time
 		}
 	}
@@ -296,40 +275,28 @@ export class SessionManager {
 	 * Merges a partial state update from the summarizer into the current state.
 	 * Only overwrites fields that are present in the update.
 	 */
-	private mergeStateUpdate(
-		state: SessionState,
-		update: Partial<SessionState>,
-	): void {
-		if (update.currentTask !== undefined)
-			state.currentTask = update.currentTask;
-		if (update.currentObjective !== undefined)
+	private mergeStateUpdate(state: SessionState, update: Partial<SessionState>): void {
+		if (typeof update.currentTask === "string") state.currentTask = update.currentTask;
+		if (typeof update.currentObjective === "string")
 			state.currentObjective = update.currentObjective;
-		if (update.mainTopic !== undefined) state.mainTopic = update.mainTopic;
-		if (update.activeEpisodeId !== undefined)
-			state.activeEpisodeId = update.activeEpisodeId;
+		if (typeof update.mainTopic === "string") state.mainTopic = update.mainTopic;
+		if (typeof update.activeEpisodeId === "string") state.activeEpisodeId = update.activeEpisodeId;
 
-		if (update.decisions !== undefined) state.decisions = update.decisions;
-		if (update.pendingTasks !== undefined)
-			state.pendingTasks = update.pendingTasks;
-		if (update.importantFiles !== undefined)
-			state.importantFiles = update.importantFiles;
-		if (update.knownErrors !== undefined)
-			state.knownErrors = update.knownErrors;
-		if (update.risks !== undefined) state.risks = update.risks;
-		if (update.nextSteps !== undefined) state.nextSteps = update.nextSteps;
-		if (update.conclusions !== undefined)
-			state.conclusions = update.conclusions;
-		if (update.episodes !== undefined) state.episodes = update.episodes;
+		if (Array.isArray(update.decisions)) state.decisions = update.decisions;
+		if (Array.isArray(update.pendingTasks)) state.pendingTasks = update.pendingTasks;
+		if (Array.isArray(update.importantFiles)) state.importantFiles = update.importantFiles;
+		if (Array.isArray(update.knownErrors)) state.knownErrors = update.knownErrors;
+		if (Array.isArray(update.risks)) state.risks = update.risks;
+		if (Array.isArray(update.nextSteps)) state.nextSteps = update.nextSteps;
+		if (Array.isArray(update.conclusions)) state.conclusions = update.conclusions;
+		if (Array.isArray(update.episodes)) state.episodes = update.episodes;
 	}
 
 	/**
 	 * Applies simple heuristic updates to the state without calling the LLM.
 	 * This provides basic state management even when the summarizer is unavailable.
 	 */
-	private async applyHeuristicUpdates(
-		state: SessionState,
-		text: string,
-	): Promise<void> {
+	private async applyHeuristicUpdates(state: SessionState, text: string): Promise<void> {
 		const now = new Date().toISOString();
 		const activeEp = state.activeEpisodeId;
 
@@ -352,9 +319,7 @@ export class SessionManager {
 			const filePath = match[1].replace(/[`']/g, "");
 			// Only add if it looks like a source file with a valid extension
 			if (
-				/\.(ts|js|tsx|jsx|py|rs|go|java|css|json|md|yaml|yml|toml|vue|svelte)$/i.test(
-					filePath,
-				) &&
+				/\.(ts|js|tsx|jsx|py|rs|go|java|css|json|md|yaml|yml|toml|vue|svelte)$/i.test(filePath) &&
 				!TECH_EXCLUSIONS.test(filePath) &&
 				!state.importantFiles.some((f) => f.path === filePath)
 			) {
@@ -370,10 +335,7 @@ export class SessionManager {
 	/**
 	 * Extracts conclusions and next steps from assistant responses heuristically.
 	 */
-	private extractConclusionsFromAssistant(
-		state: SessionState,
-		text: string,
-	): void {
+	private extractConclusionsFromAssistant(state: SessionState, text: string): void {
 		const now = new Date().toISOString();
 		const activeEp = state.activeEpisodeId;
 
@@ -425,9 +387,7 @@ export class SessionManager {
 		}
 
 		// Pattern for error detection
-		const errorMatch = text.match(
-			/(?:error|problema|bug|fallo|issue)[:\s]+(.+?)(?:\.|$)/i,
-		);
+		const errorMatch = text.match(/(?:error|problema|bug|fallo|issue)[:\s]+(.+?)(?:\.|$)/i);
 		if (errorMatch) {
 			const errText = errorMatch[1].trim();
 			if (errText.length > 10) {

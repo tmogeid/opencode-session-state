@@ -7,7 +7,7 @@
  * Hooks used:
  * - chat.message:                          Capture user messages
  * - event:             Session lifecycle + assistant message tracking
- * - experimental.chat.system.transform:  Inject state into system prompt
+ * - experimental.chat.messages.transform: Inject state at payload tail (.1 cache-safety)
  * - experimental.session.compacting:     Preserve context during compaction
  * - experimental.compaction.autocontinue: Control post-compaction auto-continue
  * - tool:              Session_state tool
@@ -19,11 +19,14 @@ import type { Plugin, PluginInput, PluginOptions } from "@opencode-ai/plugin";
 import { resolveConfig, type SsmConfig } from "./config.js";
 import { createLogger, setGlobalLogger, getLogger } from "./logger.js";
 import { SessionManager } from "./session-manager.js";
-import {
-	formatStateAsXml,
-	estimateInjectionTokens,
-} from "./context-injector.js";
+import { formatStateAsXml, estimateInjectionTokens } from "./context-injector.js";
 import { createSessionStateTool } from "./tools/session-state.js";
+import {
+	appendTaggedSyntheticPart,
+	appendTrailingVolatileMessage,
+	stripTaggedContent,
+	// @ts-ignore — módulo JS externo sin tipos (.1 cache-safety, D1)
+} from "./cache-safe-injection.js";
 import { join } from "node:path";
 
 // ─── Plugin Default Export ──────────────────────────────────────────────────
@@ -32,9 +35,7 @@ const PLUGIN_NAME = "SessionStateManager";
 
 const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 	// ── 1. Initialize configuration ─────────────────────────────────────────
-	const config: SsmConfig = resolveConfig(
-		options as Record<string, unknown> | undefined,
-	);
+	const config: SsmConfig = resolveConfig(options as Record<string, unknown> | undefined);
 
 	// ── 2. Initialize logger (file-based + toast for errors) ───────────────
 	const logDir = join(ctx.directory, ".session-state", "logs");
@@ -52,19 +53,14 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 			: undefined,
 	});
 	setGlobalLogger(log);
-	log.info(
-		`SessionStateManager v1.1.0 (NVIDIA Llama 3.1 8B default + json-repair) initializing...`,
-	);
+	log.info(`SessionStateManager v1.0.3 (big-pickle default + json-repair) initializing...`);
 	log.info(`Project: ${ctx.directory}`);
 
 	// ── 3. Initialize session manager ───────────────────────────────────────
 	const sessionManager = new SessionManager(config, ctx.directory);
 
 	// ── 4. Register tool(s) ────────────────────────────────────────────────
-	const sessionStateTool = createSessionStateTool(
-		sessionManager,
-		ctx.directory,
-	);
+	const sessionStateTool = createSessionStateTool(sessionManager, ctx.directory);
 
 	// ── 5. Return hooks ────────────────────────────────────────────────────
 	return {
@@ -89,11 +85,8 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 
 				// Extract text from message parts — safe at runtime
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				const text = ((output.parts ?? []) as any[])
-					.filter(
-						(p: { type: string }) =>
-							p.type === "text" || p.type === "tool_result",
-					)
+				const text = (output.parts as any[])
+					.filter((p: { type: string }) => p.type === "text" || p.type === "tool_result")
 					.map((p: { text?: string }) => p.text ?? "")
 					.join("\n")
 					.trim();
@@ -129,10 +122,7 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 
 				// Extract session ID based on event type
 				let sessionId: string | undefined;
-				if (
-					event.properties?.info &&
-					typeof event.properties.info === "object"
-				) {
+				if (event.properties?.info && typeof event.properties.info === "object") {
 					const info = event.properties.info as Record<string, unknown>;
 					if (typeof info.sessionID === "string") {
 						sessionId = info.sessionID as string;
@@ -174,9 +164,7 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 					}
 
 					case "message.updated": {
-						const info = event.properties?.info as
-							| Record<string, unknown>
-							| undefined;
+						const info = event.properties?.info as Record<string, unknown> | undefined;
 						const role = info?.role as string | undefined;
 						const text = extractMessageText(event);
 
@@ -198,24 +186,57 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 					}
 				}
 			} catch (err) {
-				getLogger().error(
-					`event hook error: ${err instanceof Error ? err.message : String(err)}`,
-				);
+				getLogger().error(`event hook error: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		},
+		// DEPRECATED .1 cache-safety — experimental.chat.system.transform eliminado.
+		// Inyectaba el estado en output.system (cabecera del payload: tools →
+		// system → messages) y bustaba el byte-prefix del prompt-cache en cada
+		// turno, porque el XML cambia. Reemplazado por messages.transform, que
+		// inyecta en el tail del payload vía cache-safe-injection.js.
+		// Código anterior (fallback si messages.transform no está disponible):
+		// async "experimental.chat.system.transform"(input, output) {
+		// 	if (!config.injectionEnabled) return;
+		// 	try {
+		// 		const sessionId = input.sessionID;
+		// 		if (!sessionId) return;
+		// 		const state = sessionManager.getCachedState(sessionId);
+		// 		if (!state) return;
+		// 		const xml = formatStateAsXml(state);
+		// 		if (!xml) return;
+		// 		output.system.push(xml);
+		// 		const estTokens = estimateInjectionTokens(xml);
+		// 		log.debug(
+		// 			`State injected into system prompt — ` +
+		// 				`~${estTokens} tokens, ${xml.length} chars`,
+		// 		);
+		// 	} catch (err) {
+		// 		getLogger().error(
+		// 			`system.transform hook error: ${err instanceof Error ? err.message : String(err)}`,
+		// 		);
+		// 	}
+		// },
 
 		/**
-		 * Injects the current session state into the system prompt
-		 * before every LLM call.
+		 * Injects the current session state at the TAIL of the outgoing
+		 * payload before every LLM call (.1 cache-safety).
 		 *
-		 * This is the core hook that makes the session state visible
-		 * to the AI — fully automatic, zero user intervention.
+		 * Replaces the legacy system.transform injection: mutating the system
+		 * prompt busted the provider byte-prefix cache every turn, because the
+		 * state XML changes. This hook appends deterministic content at the
+		 * tail of an existing user message, or as a trailing synthetic message
+		 * when the payload ends in an assistant message, so cache churn only
+		 * ever touches the end of the prompt. Fully automatic, zero user
+		 * intervention; never persists the synthetic message (render-time only).
 		 */
-		async "experimental.chat.system.transform"(input, output) {
+		async "experimental.chat.messages.transform"(_input, output) {
 			if (!config.injectionEnabled) return;
 
 			try {
-				const sessionId = input.sessionID;
+				const messages = output && Array.isArray(output.messages) ? output.messages : null;
+				if (!messages || messages.length === 0) return;
+
+				const sessionId = findSessionIdInMessages(messages);
 				if (!sessionId) return;
 
 				const state = sessionManager.getCachedState(sessionId);
@@ -224,16 +245,33 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 				const xml = formatStateAsXml(state);
 				if (!xml) return;
 
-				output.system.push(xml);
+				// Metadata key estable para dedupe: quitar y re-appendrear
+				// cualquier inyección previa antes de insertar la actual.
+				const KEY = "session-state-injected";
+				stripTaggedContent(messages, KEY);
+
+				const lastMessage = messages[messages.length - 1];
+				const lastRole = lastMessage?.info?.role;
+				if (lastRole === "user") {
+					appendTaggedSyntheticPart(lastMessage, {
+						text: xml,
+						metadataKey: KEY,
+					});
+				} else {
+					appendTrailingVolatileMessage(
+						messages,
+						{ role: "user", sessionID: sessionId },
+						{ text: xml, metadataKey: KEY },
+					);
+				}
 
 				const estTokens = estimateInjectionTokens(xml);
 				log.debug(
-					`State injected into system prompt — ` +
-						`~${estTokens} tokens, ${xml.length} chars`,
+					`State injected at payload tail — ` + `~${estTokens} tokens, ${xml.length} chars`,
 				);
 			} catch (err) {
 				getLogger().error(
-					`system.transform hook error: ${err instanceof Error ? err.message : String(err)}`,
+					`messages.transform hook error: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
 		},
@@ -315,9 +353,7 @@ function extractMessageText(event: {
 
 		// Try parts directly
 		if (Array.isArray(props.parts)) {
-			return extractTextFromParts(
-				props.parts as Array<Record<string, unknown>>,
-			);
+			return extractTextFromParts(props.parts as Array<Record<string, unknown>>);
 		}
 
 		return null;
@@ -329,9 +365,7 @@ function extractMessageText(event: {
 /**
  * Extracts text from an array of message parts (OpenCode message format).
  */
-function extractTextFromParts(
-	parts: Array<Record<string, unknown>>,
-): string | null {
+function extractTextFromParts(parts: Array<Record<string, unknown>>): string | null {
 	const textParts = parts
 		.filter((p) => p.type === "text" || p.type === "tool_result")
 		.map((p) => {
@@ -341,6 +375,21 @@ function extractTextFromParts(
 		.filter((t) => t.length > 0);
 
 	return textParts.length > 0 ? textParts.join("\n").trim() : null;
+}
+
+/**
+ * Extracts the session ID from the first message that carries one.
+ * The messages.transform hook input has no sessionID field, so the
+ * session is derived from the message info objects.
+ */
+function findSessionIdInMessages(
+	messages: Array<{ info?: { sessionID?: string } }>,
+): string | null {
+	for (const message of messages) {
+		const sessionID = message?.info?.sessionID;
+		if (typeof sessionID === "string" && sessionID) return sessionID;
+	}
+	return null;
 }
 
 /**

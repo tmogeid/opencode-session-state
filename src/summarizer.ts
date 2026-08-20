@@ -103,9 +103,7 @@ export async function incrementalSummarize(
 		);
 		return updated;
 	} catch (err) {
-		log.warn(
-			`Summarizer LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
-		);
+		log.warn(`Summarizer LLM call failed: ${err instanceof Error ? err.message : String(err)}`);
 		return null;
 	}
 }
@@ -150,10 +148,7 @@ Campos posibles:
 /**
  * Builds the incremental user prompt with previous state + new turns.
  */
-function buildIncrementalPrompt(
-	prevState: SessionState,
-	newTurns: TurnData[],
-): string {
+function buildIncrementalPrompt(prevState: SessionState, newTurns: TurnData[]): string {
 	const turnsText = newTurns
 		.map((t) => `<${t.role}>\n${cleanContent(t.text)}\n</${t.role}>`)
 		.join("\n\n");
@@ -227,7 +222,7 @@ async function callLLM(
 			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(60000),
+		signal: AbortSignal.timeout(120000),
 	});
 
 	if (!response.ok) {
