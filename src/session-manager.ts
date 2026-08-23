@@ -15,7 +15,7 @@ import { StateStore, type SessionState, createEmptyState } from "./state-store.j
 import { detectTopicChange, applyTopicChange, compressOldEpisodes } from "./episode-detector.js";
 import { incrementalSummarize, type TurnData } from "./summarizer.js";
 import { getLogger } from "./logger.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const MAX_LIVE_SESSIONS = 24;
@@ -41,6 +41,10 @@ interface LiveSession {
 	messageCount: number;
 	/** When the session was first seen */
 	createdAt: number;
+	/** Timestamp of the last disk stat check in getCachedState */
+	lastDiskCheckMs: number;
+	/** mtimeMs of the disk file at the last read */
+	lastMtimeMs: number;
 }
 
 /**
@@ -100,6 +104,8 @@ export class SessionManager {
 			lastSummarizerCall: 0,
 			messageCount: stored ? state.decisions.length : 0,
 			createdAt: Date.now(),
+			lastDiskCheckMs: 0,
+			lastMtimeMs: 0,
 		});
 
 		return state;
@@ -179,27 +185,37 @@ export class SessionManager {
 	/**
 	 * Returns the current session state, preferring the on-disk state when it
 	 * exists. Never serves stale in-memory state over a correct disk file:
-	 * reads disk synchronously every call, and if the disk file holds the
-	 * authoritative state, the in-memory cache is refreshed and returned.
+	 * stats the disk file on every call (cheap) and only re-reads/parses when
+	 * its mtime changed; otherwise the in-memory cache is served.
 	 */
 	getCachedState(sessionId: string): SessionState | null {
 		const live = this.sessions.get(sessionId);
-		// Always read disk first; if it exists, it is authoritative.
+		const diskPath = join(this.projectDir, this.config.storageDir, `${sessionId}.json`);
 		try {
-			const diskPath = join(this.projectDir, this.config.storageDir, `${sessionId}.json`);
-			const raw = readFileSync(diskPath, "utf-8");
-			const diskState = JSON.parse(raw) as SessionState;
-			if (diskState && typeof diskState.currentTask === "string") {
-				if (live) live.state = diskState;
-				else
-					this.sessions.set(sessionId, {
-						state: diskState,
-						pendingTurns: [],
-						lastSummarizerCall: 0,
-						messageCount: 0,
-						createdAt: Date.now(),
-					});
-				return diskState;
+			// statSync is cheap; only re-read and parse when the file changed.
+			const mtimeMs = statSync(diskPath).mtimeMs;
+			if (!live || live.lastMtimeMs !== mtimeMs) {
+				const raw = readFileSync(diskPath, "utf-8");
+				const diskState = JSON.parse(raw) as SessionState;
+				if (diskState && typeof diskState.currentTask === "string") {
+					const now = Date.now();
+					if (live) {
+						live.state = diskState;
+						live.lastDiskCheckMs = now;
+						live.lastMtimeMs = mtimeMs;
+					} else {
+						this.sessions.set(sessionId, {
+							state: diskState,
+							pendingTurns: [],
+							lastSummarizerCall: 0,
+							messageCount: 0,
+							createdAt: Date.now(),
+							lastDiskCheckMs: now,
+							lastMtimeMs: mtimeMs,
+						});
+					}
+					return diskState;
+				}
 			}
 		} catch {
 			// No disk file (or unreadable) — fall through to cache.
@@ -221,8 +237,7 @@ export class SessionManager {
 	/**
 	 * Persists state to disk (async, fire-and-forget safe).
 	 * Guard: never overwrite a correct on-disk state with stale in-memory state.
-	 * If the disk state is newer (updatedAt) or was corrected externally
-	 * (currentTask differs from the live state), abort the stale write, reload
+	 * If the disk state is newer (updatedAt), abort the stale write, reload
 	 * from disk, and re-write the disk state.
 	 */
 	async persist(sessionId: string, state: SessionState): Promise<void> {
@@ -232,14 +247,14 @@ export class SessionManager {
 			const memTime = new Date(state.updatedAt).getTime();
 			if (diskState) {
 				const diskTime = new Date(diskState.updatedAt).getTime();
-				const live = this.sessions.get(sessionId);
-				const diskCorrected = live?.state.currentTask !== diskState.currentTask;
 				const diskNewer = !Number.isNaN(memTime) && !Number.isNaN(diskTime) && diskTime > memTime;
-				if (diskCorrected || diskNewer) {
+				if (diskNewer) {
 					const log = getLogger();
+					const taskPreview = diskState.currentTask.slice(0, 80);
 					log.warn(
-						`persist: disk has authoritative state for ${sessionId} (currentTask: ${diskState.currentTask}); reloading from disk`,
+						`persist: disk has authoritative state for ${sessionId} (currentTask: ${taskPreview}); reloading from disk`,
 					);
+					const live = this.sessions.get(sessionId);
 					if (live) live.state = diskState;
 					await this.store.write(sessionId, diskState);
 					return;
