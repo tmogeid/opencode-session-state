@@ -53,7 +53,7 @@ const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) => {
 			: undefined,
 	});
 	setGlobalLogger(log);
-	log.info(`SessionStateManager v1.0.3 (big-pickle default + json-repair) initializing...`);
+	log.info(`SessionStateManager v1.1.4 (big-pickle default + json-repair) initializing...`);
 	log.info(`Project: ${ctx.directory}`);
 
 	// ── 3. Initialize session manager ───────────────────────────────────────

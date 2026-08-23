@@ -1,6 +1,6 @@
 {
 	"name": "opencode-session-state",
-	"version": "1.1.3",
+	"version": "1.1.4",
 	"description": "Intelligent session state manager for OpenCode — preserves context across compactions, model switches, and long sessions",
 	"type": "module",
 	"main": "dist/plugin.js",

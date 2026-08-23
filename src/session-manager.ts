@@ -15,6 +15,8 @@ import { StateStore, type SessionState, createEmptyState } from "./state-store.j
 import { detectTopicChange, applyTopicChange, compressOldEpisodes } from "./episode-detector.js";
 import { incrementalSummarize, type TurnData } from "./summarizer.js";
 import { getLogger } from "./logger.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const MAX_LIVE_SESSIONS = 24;
 
@@ -175,10 +177,33 @@ export class SessionManager {
 	}
 
 	/**
-	 * Returns the current session state from cache (fast, no disk read).
+	 * Returns the current session state, preferring the on-disk state when it
+	 * exists. Never serves stale in-memory state over a correct disk file:
+	 * reads disk synchronously every call, and if the disk file holds the
+	 * authoritative state, the in-memory cache is refreshed and returned.
 	 */
 	getCachedState(sessionId: string): SessionState | null {
 		const live = this.sessions.get(sessionId);
+		// Always read disk first; if it exists, it is authoritative.
+		try {
+			const diskPath = join(this.projectDir, this.config.storageDir, `${sessionId}.json`);
+			const raw = readFileSync(diskPath, "utf-8");
+			const diskState = JSON.parse(raw) as SessionState;
+			if (diskState && typeof diskState.currentTask === "string") {
+				if (live) live.state = diskState;
+				else
+					this.sessions.set(sessionId, {
+						state: diskState,
+						pendingTurns: [],
+						lastSummarizerCall: 0,
+						messageCount: 0,
+						createdAt: Date.now(),
+					});
+				return diskState;
+			}
+		} catch {
+			// No disk file (or unreadable) — fall through to cache.
+		}
 		return live?.state ?? null;
 	}
 
@@ -195,9 +220,31 @@ export class SessionManager {
 
 	/**
 	 * Persists state to disk (async, fire-and-forget safe).
+	 * Guard: never overwrite a correct on-disk state with stale in-memory state.
+	 * If the disk state is newer (updatedAt) or was corrected externally
+	 * (currentTask differs from the live state), abort the stale write, reload
+	 * from disk, and re-write the disk state.
 	 */
 	async persist(sessionId: string, state: SessionState): Promise<void> {
 		try {
+			const diskState = await this.store.read(sessionId);
+			// Fallback: if disk is newer than live state, disk was fixed externally.
+			const memTime = new Date(state.updatedAt).getTime();
+			if (diskState) {
+				const diskTime = new Date(diskState.updatedAt).getTime();
+				const live = this.sessions.get(sessionId);
+				const diskCorrected = live?.state.currentTask !== diskState.currentTask;
+				const diskNewer = !Number.isNaN(memTime) && !Number.isNaN(diskTime) && diskTime > memTime;
+				if (diskCorrected || diskNewer) {
+					const log = getLogger();
+					log.warn(
+						`persist: disk has authoritative state for ${sessionId} (currentTask: ${diskState.currentTask}); reloading from disk`,
+					);
+					if (live) live.state = diskState;
+					await this.store.write(sessionId, diskState);
+					return;
+				}
+			}
 			await this.store.write(sessionId, state);
 		} catch (err) {
 			const log = getLogger();
