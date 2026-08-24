@@ -41,8 +41,6 @@ interface LiveSession {
 	messageCount: number;
 	/** When the session was first seen */
 	createdAt: number;
-	/** Timestamp of the last disk stat check in getCachedState */
-	lastDiskCheckMs: number;
 	/** mtimeMs of the disk file at the last read */
 	lastMtimeMs: number;
 }
@@ -104,7 +102,6 @@ export class SessionManager {
 			lastSummarizerCall: 0,
 			messageCount: stored ? state.decisions.length : 0,
 			createdAt: Date.now(),
-			lastDiskCheckMs: 0,
 			lastMtimeMs: 0,
 		});
 
@@ -198,10 +195,8 @@ export class SessionManager {
 				const raw = readFileSync(diskPath, "utf-8");
 				const diskState = JSON.parse(raw) as SessionState;
 				if (diskState && typeof diskState.currentTask === "string") {
-					const now = Date.now();
 					if (live) {
 						live.state = diskState;
-						live.lastDiskCheckMs = now;
 						live.lastMtimeMs = mtimeMs;
 					} else {
 						this.sessions.set(sessionId, {
@@ -210,7 +205,6 @@ export class SessionManager {
 							lastSummarizerCall: 0,
 							messageCount: 0,
 							createdAt: Date.now(),
-							lastDiskCheckMs: now,
 							lastMtimeMs: mtimeMs,
 						});
 					}
@@ -219,6 +213,7 @@ export class SessionManager {
 			}
 		} catch {
 			// No disk file (or unreadable) — fall through to cache.
+			if (live) live.lastMtimeMs = -1; // fuerza re-read si el archivo reaparece
 		}
 		return live?.state ?? null;
 	}
@@ -251,7 +246,7 @@ export class SessionManager {
 				if (diskNewer) {
 					const log = getLogger();
 					const taskPreview = diskState.currentTask.slice(0, 80);
-					log.warn(
+					log.debug(
 						`persist: disk has authoritative state for ${sessionId} (currentTask: ${taskPreview}); reloading from disk`,
 					);
 					const live = this.sessions.get(sessionId);
