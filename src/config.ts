@@ -21,6 +21,9 @@ export interface SsmConfig {
 	/** Max output tokens per summarizer call */
 	maxTokens: number;
 
+	/** Timeout in ms for summarizer LLM calls */
+	timeout: number;
+
 	/** Maximum number of episodes before compressing the oldest */
 	maxEpisodes: number;
 
@@ -44,11 +47,12 @@ export interface SsmConfig {
 }
 
 const DEFAULTS: SsmConfig = {
-	model: "meta/llama-3.1-8b-instruct",
-	apiBaseUrl: "https://integrate.api.nvidia.com/v1",
+	model: "big-pickle",
+	apiBaseUrl: "https://opencode.ai/zen/v1",
 	apiKey: undefined,
 	temperature: 0.1,
 	maxTokens: 2000,
+	timeout: 300000,
 	maxEpisodes: 4,
 	maxStateTokens: 5000,
 	logging: "info",
@@ -91,22 +95,20 @@ export function resolveConfig(options?: Record<string, unknown>): SsmConfig {
 		config.autoSummary = options.autoSummary;
 	if (typeof options.summarizerInterval === "number")
 		config.summarizerInterval = options.summarizerInterval;
+	if (typeof options.timeout === "number")
+		config.timeout = options.timeout;
 
 	// Fall back to env var if no explicit API key
 	if (!config.apiKey) {
 		config.apiKey =
-			process.env.NVIDIA_API_KEY ??
 			process.env.OPENROUTER_API_KEY ??
+			process.env.OPENCODE_ZEN_API_KEY ??
+			process.env.NVIDIA_API_KEY ??
 			process.env.OPENAI_API_KEY ??
 			undefined;
 		if (!config.apiKey) {
-			log.error(
-				"NVIDIA_API_KEY no configurada. El plugin NO funcionará.\n" +
-					"Para usar el modelo default (meta/llama-3.1-8b-instruct):\n" +
-					"  1. Obtén una API key en https://build.nvidia.com\n" +
-					"  2. Configúrala: export NVIDIA_API_KEY=nvapi-...\n" +
-					"  3. Reinicia OpenCode\n" +
-					'Alternativa: cambia "model" y "apiBaseUrl" en tu opencode.json',
+			log.warn(
+				"No API key configured. Set OPENROUTER_API_KEY, OPENCODE_ZEN_API_KEY, NVIDIA_API_KEY, or OPENAI_API_KEY env var, or pass apiKey in options.",
 			);
 		}
 	}

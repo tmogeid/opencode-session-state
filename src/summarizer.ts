@@ -191,13 +191,62 @@ function cleanContent(text: string): string {
 }
 
 /**
- * Calls the LLM API (OpenAI-compatible) and returns the raw response text.
+ * Redacts likely secrets from a provider body snippet and caps length.
+ */
+function redactSnippet(text: string): string {
+	return text
+		.replace(/Bearer\s+[^\s]+/gi, "Bearer [redacted]")
+		.replace(/sk-[A-Za-z0-9-_]+/g, "[redacted]")
+		.replace(/(api[_-]?key["'\s:=]+)[^\s"',}]+/gi, "$1[redacted]")
+		.slice(0, 300);
+}
+
+/**
+ * Extracts concatenated delta.content/message.content from SSE payloads.
+ * Returns isSSE=true when content-type is event-stream or the body carries
+ * SSE framing lines (: / data:). Empty content means no usable text.
+ */
+function extractSSEContent(
+	rawBody: string,
+	contentType: string,
+): { isSSE: boolean; content: string } {
+	const looksSSE =
+		contentType.includes("text/event-stream") || /(^|\n)\s*(data:|:\s)/m.test(rawBody);
+	if (!looksSSE) return { isSSE: false, content: "" };
+	const parts: string[] = [];
+	for (const line of rawBody.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith(":")) continue;
+		const payload = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
+		if (!payload || payload === "[DONE]") continue;
+		try {
+			const chunk = JSON.parse(payload) as {
+				choices?: Array<{
+					delta?: { content?: string };
+					message?: { content?: string };
+				}>;
+			};
+			const c = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content;
+			if (typeof c === "string" && c) parts.push(c);
+		} catch {
+			// Non-JSON SSE payload — ignore.
+		}
+	}
+	return { isSSE: true, content: parts.join("").trim() };
+}
+
+/**
+ * Calls the LLM API (OpenAI-compatible) and returns response text.
+ * Works with any body (normal, md or json): prefers choices[0].message.content
+ * when present, else falls back to the trimmed rawBody. Only null on total
+ * empty or non-OK without body. Never throws on parse.
  */
 async function callLLM(
 	systemPrompt: string,
 	userPrompt: string,
 	config: SsmConfig,
 ): Promise<string | null> {
+	const log = getLogger();
 	const apiKey = config.apiKey;
 	if (!apiKey) return null;
 
@@ -211,6 +260,7 @@ async function callLLM(
 		],
 		temperature: config.temperature,
 		max_tokens: config.maxTokens,
+		stream: false,
 		response_format: { type: "json_object" },
 	};
 
@@ -222,21 +272,76 @@ async function callLLM(
 			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(120000),
+		signal: AbortSignal.timeout(config.timeout),
 	});
 
+	const rawBody = await response.text().catch(() => "");
+	const snippet = redactSnippet(rawBody);
+	const contentType = response.headers.get("content-type") ?? "";
+
 	if (!response.ok) {
-		const errBody = await response.text().catch(() => "unknown");
-		throw new Error(`LLM API ${response.status}: ${errBody.slice(0, 300)}`);
+		if (!rawBody.trim()) {
+			log.info(
+				`Summarizer provider non-OK ${response.status} (${contentType || "unknown content-type"}): ${snippet}`,
+			);
+			return null;
+		}
+		if (contentType.includes("json")) {
+			try {
+				const errData = JSON.parse(rawBody) as {
+					choices?: Array<{ message?: { content?: string } }>;
+				};
+				const errContent = errData.choices?.[0]?.message?.content?.trim();
+				if (errContent) return errContent;
+			} catch {
+				// Fall through to raw text below.
+			}
+		}
+		log.info(
+			`Summarizer provider non-OK ${response.status} (${contentType || "unknown content-type"}), using raw text: ${snippet}`,
+		);
+		return rawBody.trim();
 	}
 
-	const data = (await response.json()) as {
-		choices?: Array<{ message?: { content?: string } }>;
-	};
-	const content = data.choices?.[0]?.message?.content;
-	if (!content) throw new Error("Empty LLM response");
+	if (!rawBody.trim()) {
+		log.info(`Summarizer provider empty body (${contentType || "unknown content-type"})`);
+		return null;
+	}
 
-	return content;
+	const sse = extractSSEContent(rawBody, contentType);
+	if (sse.isSSE) {
+		if (sse.content) {
+			log.info(
+				`Summarizer provider SSE body (${contentType || "unknown content-type"}), extracted delta content`,
+			);
+			return sse.content;
+		}
+		log.info(
+			`Summarizer provider SSE without usable content (${contentType || "unknown content-type"}): ${snippet}`,
+		);
+		return null;
+	}
+
+	try {
+		const data = JSON.parse(rawBody) as {
+			choices?: Array<{ message?: { content?: string } }>;
+		};
+		const content = data.choices?.[0]?.message?.content?.trim();
+		if (content) return content;
+	} catch {
+		// Not JSON — fall through to raw text below.
+	}
+	const text = rawBody.trim();
+	if (!text) {
+		log.info(
+			`Summarizer provider empty content (${contentType || "unknown content-type"}): ${snippet}`,
+		);
+		return null;
+	}
+	log.info(
+		`Summarizer provider non-JSON body (${contentType || "unknown content-type"}), using raw text: ${snippet}`,
+	);
+	return text;
 }
 
 /**
@@ -251,23 +356,42 @@ function parseLLMResponse(
 	const log = getLogger();
 
 	// Strip markdown code fences if present
-	const cleaned = raw
+	let cleaned = raw
 		.replace(/^```(?:json)?\s*/i, "")
 		.replace(/\s*```$/i, "")
 		.trim();
+
+	// Tolerant: strip SSE framing if raw arrived with event-stream lines.
+	const sseInParse = extractSSEContent(raw, "");
+	if (sseInParse.isSSE) {
+		if (sseInParse.content) {
+			cleaned = sseInParse.content;
+		} else {
+			log.debug("Summarizer SSE without usable JSON, skipping parse");
+			return {};
+		}
+	}
 
 	if (!cleaned || cleaned === "{}") {
 		log.debug("Summarizer returned empty update");
 		return {};
 	}
 
+	// Tolerant: extract first { … last } to drop md/prose wrappers before parse.
+	const braceFirst = cleaned.indexOf("{");
+	const braceLast = cleaned.lastIndexOf("}");
+	const candidate =
+		braceFirst >= 0 && braceLast > braceFirst
+			? cleaned.slice(braceFirst, braceLast + 1).trim()
+			: cleaned;
+
 	// Attempt 1: direct parse
 	let parsed: Record<string, unknown> | null = null;
 	try {
-		parsed = JSON.parse(cleaned) as Record<string, unknown>;
+		parsed = JSON.parse(candidate) as Record<string, unknown>;
 	} catch {
 		// Attempt 2: auto-repair truncated JSON (missing closing braces/brackets)
-		const repaired = autoRepairJSON(cleaned);
+		const repaired = autoRepairJSON(candidate);
 		if (repaired !== cleaned) {
 			try {
 				parsed = JSON.parse(repaired) as Record<string, unknown>;
