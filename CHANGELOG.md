@@ -3,6 +3,7 @@
 ## v2.0.0
 
 - feat: nuevo entrypoint v2 (`index.js`) adaptado a la API v2 de plugins (`@opencode-ai/plugin/v2/promise`).
+- feat: mapa `exports` declarado con la condicion `types` primera para que TypeScript resuelva `dist/index.d.ts` con resolucion node16/nodenext, y `main` sin el prefijo `./` para que npm incluya automaticamente el entrypoint.
 - feat: registro de hooks v2 (`chat.message`, `event`, `experimental.chat.messages.transform`, `experimental.session.compacting`).
 - feat: identificadores de episodio deterministas calculados a partir del estado persistido en lugar de un contador global en memoria de proceso.
 - feat: herramienta `session_state` con 4 acciones operativas (`ver`, `resumen`, `episodios`, `limpiar`).
