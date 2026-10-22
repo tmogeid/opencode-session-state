@@ -9,6 +9,7 @@
  */
 
 import type { Episode, SessionState } from "./state-store.js";
+import { maxEpisodeNumber, nextEpisodeId } from "./state-store.js";
 import { getLogger } from "./logger.js";
 
 /** Patterns that explicitly signal a topic change */
@@ -83,16 +84,17 @@ export function detectTopicChange(
     }
   }
 
-  // 2. Check task change patterns
+  // 2. Check task/objective change patterns
   for (const pattern of TASK_CHANGE_PATTERNS) {
     const match = newMessage.match(pattern);
     if (match) {
-      log.debug(`Task change detected: "${match[0]}"`);
+      const task = match[2]?.trim();
+      log.debug(`Task change detected via pattern: "${task}"`);
       return {
         detected: true,
         type: "task_change",
-        confidence: 0.7,
-        newTask: match[2] || extractNewTopic(newMessage),
+        confidence: 0.85,
+        newTask: task,
       };
     }
   }
@@ -104,6 +106,7 @@ export function detectTopicChange(
       const mentionedFile = fileMatch[1].replace(/[`']/g, "");
       // Skip technology names and very short matches
       if (TECH_EXCLUSIONS.test(mentionedFile) || mentionedFile.length < 3) {
+        // not a real file
         continue;
       }
       const isNewFile = !importantFiles.some(
@@ -154,9 +157,9 @@ export function applyTopicChange(
     currentEp.summary = generateEpisodeSummary(currentEp, _messages);
   }
 
-  // Create new episode
-  episodeCounter++;
-  const epId = `ep${episodeCounter}`;
+  // Create new episode (single source of truth: max epN present + collision guard)
+  const epId = nextEpisodeId(state.episodes);
+  const epNum = maxEpisodeNumber([{ id: epId } as Episode]);
   const now = new Date().toISOString();
 
   const newEpisode: Episode = {
@@ -165,7 +168,7 @@ export function applyTopicChange(
       detection.newTask ||
       detection.newTopic ||
       detection.newFile ||
-      `Episodio ${episodeCounter}`,
+      `Episodio ${epNum}`,
     topic: detection.newTopic || detection.newTask || "",
     startedAt: now,
     endedAt: null,
@@ -209,11 +212,16 @@ export function compressOldEpisodes(
     // (decisions, tasks, etc.) — they stay but reference the compressed ep
   }
 
-  // Keep only the top `maxEpisodes` episodes
-  state.episodes = sorted.slice(-maxEpisodes);
+  // Keep only the top `maxEpisodes` episodes, never dropping the active one
+  let kept = sorted.slice(-maxEpisodes);
+  if (!kept.some((e) => e.id === state.activeEpisodeId)) {
+    const active = sorted.find((e) => e.id === state.activeEpisodeId);
+    if (active) {
+      kept = [...kept.slice(1), active];
+    }
+  }
+  state.episodes = kept;
 }
-
-let episodeCounter = 0;
 
 function extractNewTopic(message: string): string | undefined {
   // Try to extract a meaningful topic from the message

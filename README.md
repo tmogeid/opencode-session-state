@@ -1,125 +1,62 @@
 # opencode-session-state
 
-[![npm version](https://img.shields.io/npm/v/opencode-session-state.svg)](https://www.npmjs.com/package/opencode-session-state)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Node.js >=18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
+Mantiene el estado de sesion entre compactaciones, cambios de modelo y sesiones largas.
 
-Plugin para [OpenCode](https://opencode.ai) que mantiene un estado inteligente de la sesión para preservar contexto tras compactaciones, cambios de modelo o sesiones largas.
+## Indice
 
-## Por qué
+- [Descripcion](#descripcion)
+- [Requisitos](#requisitos)
+- [Instalacion y Registro](#instalacion-y-registro)
+- [Hooks y Efecto en Runtime](#hooks-y-efecto-en-runtime)
+- [Herramienta session_state](#herramienta-session_state)
+- [Persistencia](#persistencia)
+- [Configuracion](#configuracion)
+- [Limitaciones](#limitaciones)
+- [Tipos](#tipos)
+- [Compatibilidad v1 y v2](#compatibilidad-v1-y-v2)
+- [Licencia](#licencia)
+- [Autoria y Enlaces](#autoria-y-enlaces)
 
-OpenCode y otros agentes LLM pierden contexto tras compactar la ventana, cambiar de modelo, o en sesiones largas. Este plugin:
+## Descripcion
 
-- Detecta automáticamente cambios de tema y crea **episodios**
-- Resume de forma incremental (nunca relee toda la conversación)
-- Inyecta el estado en el system prompt antes de cada petición
-- Preserva el contexto durante las compactaciones
-- Expone una herramienta `session_state` para inspeccionar el estado
+`opencode-session-state` es un plugin para OpenCode disenado para conservar el contexto operativo y la continuidad de las tareas a lo largo de ciclos de trabajo extensos. Detecta transiciones tematicas organizando la actividad en episodios, genera resúmenes incrementales y reinyecta el estado estructurado antes de cada llamada al modelo, manteniendo la coherencia tras compactaciones de contexto.
 
-## Instalación
+## Requisitos
 
-Hay dos métodos equivalentes. Elige según tu flujo de trabajo.
+- OpenCode con soporte para la API de plugins v2 (verificado localmente con OpenCode CLI 2.1.1).
+- `@opencode-ai/plugin` `>= 1.18.3` (version minima que expone el subpath `./v2/promise`).
+- Node.js `>= 18`.
 
-### Método A — Via npm (recomendado para usuarios finales)
+## Instalacion y Registro
+
+### 1. Instalacion del paquete
+
+Instalacion global mediante npm:
 
 ```bash
 npm install -g opencode-session-state
 ```
 
-Añade el plugin a tu `opencode.json` (global en `~/.config/opencode/opencode.json` o de proyecto):
-
-```json
-{
-  "plugin": [
-    [
-      "opencode-session-state",
-      {
-        "temperature": 0.1,
-        "logging": "info"
-      }
-    ]
-  ]
-}
-```
-
-Copia el comando `/session-state` a tu directorio de comandos:
+O clonando el repositorio para desarrollo e instalacion local:
 
 ```bash
-# Linux/macOS:
-cp node_modules/opencode-session-state/commands/session-state.md ~/.config/opencode/commands/
-
-# Windows (PowerShell):
-Copy-Item node_modules/opencode-session-state/commands/session-state.md $env:USERPROFILE\.config\opencode\commands\
-```
-
-Reinicia OpenCode.
-
-### Método B — Via GitHub (desarrollo/contribuidores)
-
-```bash
-git clone https://github.com/tmogeid/opencode-session-state.git
+git clone https://github.com/tmogeid/opencode-session-state
 cd opencode-session-state
 npm install
 npm run build
 ```
 
-Enlaza en `opencode.json` con la ruta absoluta al `dist/index.js`:
+### 2. Registro en OpenCode
+
+Agrega el plugin a la seccion `plugin` en `opencode.json` (archivo global en `~/.config/opencode/opencode.json` o local al proyecto):
 
 ```json
 {
-  "plugin": [
-    [
-      "/ruta/absoluta/a/opencode-session-state/dist/index.js",
-      {
-        "temperature": 0.1,
-        "logging": "info"
-      }
-    ]
-  ]
+  "plugin": ["opencode-session-state"]
 }
 ```
 
-Copia el comando `/session-state`:
-
-```bash
-# Linux/macOS:
-cp commands/session-state.md ~/.config/opencode/commands/
-
-# Windows (PowerShell):
-Copy-Item commands\session-state.md $env:USERPROFILE\.config\opencode\commands\
-```
-
-Reinicia OpenCode.
-
-## Modelo predeterminado
-
-El plugin usa un LLM para resumir incrementalmente la conversación. El modelo por defecto es:
-
-### meta/llama-3.1-8b-instruct (NVIDIA)
-
-- **Model ID**: `meta/llama-3.1-8b-instruct`
-- **Endpoint**: `https://integrate.api.nvidia.com/v1`
-- **Precio**: Gratis (NVIDIA build.nvidia.com free tier)
-- **Cómo obtener la API key**:
-  1. Visita [build.nvidia.com](https://build.nvidia.com)
-  2. Inicia sesión y genera una API key
-  3. La key tendrá formato `nvapi-...`
-  4. Configúrala como variable de entorno:
-
-```bash
-# Linux/macOS:
-export NVIDIA_API_KEY=nvapi-...
-
-# Windows (PowerShell sesión actual):
-$env:NVIDIA_API_KEY='nvapi-...'
-
-# Windows (persistente):
-[Environment]::SetEnvironmentVariable('NVIDIA_API_KEY', 'nvapi-...', 'User')
-```
-
-**No necesitas configurar `model` ni `apiBaseUrl`** — el plugin funciona out-of-the-box con la variable de entorno configurada.
-
-Configuración mínima:
+Para personalizar opciones de ejecucion, registra una tupla con el nombre y la configuracion deseada:
 
 ```json
 {
@@ -127,131 +64,128 @@ Configuración mínima:
     [
       "opencode-session-state",
       {
-        "temperature": 0.1,
-        "logging": "info"
+        "logging": "info",
+        "maxEpisodes": 4
       }
     ]
   ]
 }
 ```
 
-## API Key
+### 3. Registro del comando interactivo
 
-El plugin busca la API key en este orden:
+Para habilitar el comando `/session-state` en la interfaz de OpenCode, copia el archivo de definicion:
 
-1. `apiKey` explícita en la config del plugin
-2. `NVIDIA_API_KEY` (env var, RECOMENDADA)
-3. `OPENROUTER_API_KEY` (env var, alternativa)
-4. `OPENAI_API_KEY` (env var, fallback)
+En Linux y macOS:
 
-Mejor usar env vars que pasar la key directamente en la config (por seguridad).
-
-## Configuración
-
-Todas las opciones configurables:
-
-| Opción               | Tipo    | Default                               | Descripción                             |
-| -------------------- | ------- | ------------------------------------- | --------------------------------------- |
-| `model`              | string  | `meta/llama-3.1-8b-instruct`          | Modelo LLM para resúmenes               |
-| `apiBaseUrl`         | string  | `https://integrate.api.nvidia.com/v1` | URL base de la API                      |
-| `apiKey`             | string  | (env vars)                            | API key explícita                       |
-| `temperature`        | number  | `0.1`                                 | Temperatura del modelo                  |
-| `maxTokens`          | number  | `2000`                                | Tokens máximos por llamada              |
-| `maxEpisodes`        | number  | `4`                                   | Máximo de episodios                     |
-| `maxStateTokens`     | number  | `5000`                                | Máximo tokens del estado                |
-| `logging`            | string  | `info`                                | Nivel: `debug`, `info`, `warn`, `error` |
-| `storageDir`         | string  | `.session-state`                      | Directorio para archivos                |
-| `injection`          | boolean | `true`                                | Inyectar estado en system prompt        |
-| `autoSummary`        | boolean | `true`                                | Resumen automático via LLM              |
-| `summarizerInterval` | number  | `30000`                               | Intervalo mínimo (ms)                   |
-
-## Cómo funciona
-
-```
-Mensaje usuario → chat.message hook → SessionManager:
-  1. Encola turno en pendingTurns
-  2. Detecta cambio de tema → crea episodio
-  3. Aplica heurísticas (archivos, errores, decisiones)
-  4. Cada 30s y ≥2 turnos → LLM resume incremental
-     → mergeStateUpdate + persistencia a disco
-
-Respuesta asistente → event/message.updated → SessionManager:
-  1. Encola respuesta
-  2. Extrae conclusiones heurísticas
-  3. Trigger summarizer si aplica
-
-Antes de cada prompt → system.transform hook:
-  → formatStateAsXml(state) → inyecta en system prompt
+```bash
+cp commands/session-state.md ~/.config/opencode/commands/
 ```
 
-## Estado de sesión
+En Windows (PowerShell):
 
-Archivos JSON individuales en `.session-state/<sessionId>.json`:
-
-| Campo              | Descripción                 |
-| ------------------ | --------------------------- |
-| `currentTask`      | Tarea actual detectada      |
-| `currentObjective` | Objetivo actual             |
-| `mainTopic`        | Tema principal del episodio |
-| `episodes[]`       | Lista de episodios          |
-| `decisions[]`      | Decisiones tomadas          |
-| `pendingTasks[]`   | Tareas pendientes           |
-| `importantFiles[]` | Archivos mencionados        |
-| `knownErrors[]`    | Errores conocidos           |
-| `risks[]`          | Riesgos identificados       |
-| `nextSteps[]`      | Próximos pasos              |
-| `conclusions[]`    | Conclusiones                |
-
-## Herramienta `session_state`
-
-| Acción          | Descripción                           |
-| --------------- | ------------------------------------- |
-| `ver` (default) | Estado completo formateado            |
-| `resumen`       | Episodio activo actual                |
-| `episodios`     | Lista de todos los episodios          |
-| `limpiar`       | Eliminar sesiones archivadas >30 días |
-
-## Logs
-
-Los logs van a `.session-state/logs/<YYYY-MM-DD>.log`:
-
-- `DEBUG`/`INFO` → solo archivo (no molesta al TUI)
-- `WARN` → `console.warn` (silencioso en UI)
-- `ERROR` → `console.warn` + toast notification
-
-## Hooks de OpenCode
-
-| Hook                                   | Propósito                   |
-| -------------------------------------- | --------------------------- |
-| `tool`                                 | Herramienta `session_state` |
-| `chat.message`                         | Mensajes del usuario        |
-| `event`                                | Lifecycle de sesiones       |
-| `experimental.chat.system.transform`   | Inyectar estado             |
-| `experimental.session.compacting`      | Preservar en compactación   |
-| `experimental.compaction.autocontinue` | Continuar post-compactación |
-
-## Arquitectura del código
-
+```powershell
+Copy-Item commands\session-state.md $env:USERPROFILE\.config\opencode\commands\
 ```
-src/
-├── index.ts              # Entry point — hooks
-├── config.ts             # Configuración defaults + merge
-├── logger.ts             # Logging archivo + toast
-├── state-store.ts        # Persistencia JSON por sesión
-├── session-manager.ts    # Orquestador principal
-├── episode-detector.ts   # Detección cambios de tema
-├── summarizer.ts         # LLM incremental summarization
-├── context-injector.ts   # Formateo XML para system prompt
-└── tools/
-    └── session-state.ts  # Herramienta ver/resumen/episodios/limpiar
+
+## Hooks y Efecto en Runtime
+
+El entrypoint v2 (`index.js`) registra los siguientes cuatro hooks en el ciclo de vida de OpenCode:
+
+| Hook                                   | Metodo de registro v2            | Efecto en runtime                                                                                                                                                                                              |
+| -------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat.message`                         | `ctx.session.hook("prompt")`     | Captura los mensajes de texto del usuario. Garantiza la inicializacion o recuperacion del estado de la sesion y procesa el contenido para actualizar la deteccion de episodios.                                |
+| `event`                                | `ctx.event.subscribe`            | Escucha eventos del ciclo de vida (`session.created`, `session.deleted`, `session.idle`). Inicializa estructuras de datos al crear una sesion y sincroniza el estado en disco al quedar inactivo o eliminarse. |
+| `experimental.chat.messages.transform` | `ctx.session.hook("context")`    | Inserta el bloque de estado en formato XML al final (`tail`) del arreglo de mensajes salientes, garantizando la persistencia del contexto sin invalidar el prefijo de prompt-cache.                            |
+| `experimental.session.compacting`      | `ctx.session.hook("compaction")` | Inserta un snapshot del estado activo dentro del contexto de compactacion (`output.context`), preservando tareas, decisiones y contexto historico en el resumen resultante.                                    |
+
+Los hooks `experimental.chat.system.transform` y `experimental.compaction.autocontinue` no se registran en este entrypoint v2.
+
+## Herramienta session_state
+
+El plugin registra la herramienta `session_state`, permitiendo que el modelo inspeccione y administre el estado actual de la sesion. La herramienta acepta el parametro opcional `action` con cuatro operaciones disponibles:
+
+- `ver`: Muestra el estado completo estructurado de la sesion (opcion por defecto si se omite el parametro). Incluye objetivo activo, lista de episodios, decisiones adoptadas, tareas pendientes, archivos modificados y errores identificados.
+- `resumen`: Muestra exclusivamente el texto de resumen acumulado del episodio actual.
+- `episodios`: Devuelve la lista de episodios registrados en la sesion actual junto con sus identificadores y marcas de tiempo.
+- `limpiar`: Elimina del almacenamiento local las sesiones archivadas con una antiguedad mayor a 30 dias.
+
+Ejemplo de llamada de herramienta por parte del modelo:
+
+```json
+{
+  "action": "ver"
+}
 ```
+
+Ejemplo de invocacion directa desde el comando interactivo:
+
+```text
+/session-state ver
+/session-state resumen
+/session-state episodios
+/session-state limpiar
+```
+
+## Persistencia
+
+El estado de cada sesion se almacena exclusivamente en el disco local dentro del directorio del proyecto activo:
+
+```text
+<projectRoot>/.session-state/<sessionId>.json
+```
+
+El plugin no utiliza MemPalace ni ningun servicio externo; toda la persistencia es estrictamente local al proyecto.
+
+## Configuracion
+
+### Variables de entorno
+
+El motor de resumen incremental puede consultar proveedores de modelos compatibles mediante variables de entorno genericas. Configura la credencial correspondiente segun el proveedor deseado:
+
+- `OPENCODE_ZEN_API_KEY`: Clave para servicios de inferencia OpenCode Zen.
+- `OPENROUTER_API_KEY`: Clave para enrutamiento de modelos mediante OpenRouter.
+- `OPENAI_API_KEY`: Clave para proveedores con interfaz compatible con OpenAI.
+- `NVIDIA_API_KEY`: Clave para catalogo de inferencia NVIDIA NIM.
+
+### Opciones en opencode.json
+
+Las opciones se especifican en el segundo elemento de la declaracion del plugin:
+
+| Parametro        | Tipo    | Valor por defecto  | Proposito                                                                            |
+| ---------------- | ------- | ------------------ | ------------------------------------------------------------------------------------ |
+| `model`          | string  | `"big-pickle"`     | Identificador del modelo utilizado para la generacion incremental de resúmenes.      |
+| `temperature`    | number  | `0.1`              | Temperatura de muestreo para las llamadas de resumen.                                |
+| `maxEpisodes`    | number  | `4`                | Cantidad maxima de episodios conservados en el estado activo antes de consolidacion. |
+| `maxStateTokens` | number  | `5000`             | Limite estimado de tokens para el bloque de estado inyectado en el contexto.         |
+| `logging`        | string  | `"info"`           | Nivel de registro en terminal (`debug`, `info`, `warn`, `error`).                    |
+| `storageDir`     | string  | `".session-state"` | Nombre de la carpeta local dentro del proyecto donde se persisten los estados.       |
+| `injection`      | boolean | `true`             | Determina si el estado se inyecta automaticamente en cada turno de conversacion.     |
+| `autoSummary`    | boolean | `true`             | Determina si el motor de resumen incremental por LLM se ejecuta automaticamente.     |
+
+## Limitaciones
+
+- No sincroniza el estado entre distintas maquinas ni instancias remotas.
+- No comparte estado entre proyectos diferentes; cada proyecto mantiene su propio directorio `.session-state` de forma aislada.
+- No expone datos de la sesion fuera del directorio local del proyecto.
+- No utiliza MemPalace ni bases de datos remotas.
+
+## Tipos
+
+Las declaraciones de tipos publicadas (`dist/index.d.ts`) corresponden al contrato de dominio v1 y a las estructuras internas de estado, no a la superficie de hooks v2 del runtime de OpenCode.
+
+## Compatibilidad v1 y v2
+
+El entrypoint publicado y soportado es el v2 (`index.js`). El entrypoint v1 (`dist/plugin.js`) permanece incluido en el paquete por compatibilidad de distribucion previa, pero no constituye un punto de entrada soportado en esta version v2.
 
 ## Licencia
 
-[GPL-3.0](./LICENSE) — Copyright (c) 2026 tmogeid
+Este proyecto esta licenciado bajo los terminos de la GNU General Public License v3.0:
+[https://www.gnu.org/licenses/gpl-3.0](https://www.gnu.org/licenses/gpl-3.0)
 
-## Repositorio
+## Autoria y Enlaces
 
-- **Código**: [github.com/tmogeid/opencode-session-state](https://github.com/tmogeid/opencode-session-state)
-- **Issues**: [github.com/tmogeid/opencode-session-state/issues](https://github.com/tmogeid/opencode-session-state/issues)
-- **npm**: [npmjs.com/package/opencode-session-state](https://www.npmjs.com/package/opencode-session-state)
+- **Autor**: Diego / `tmogeid`
+- **Repositorio**: [https://github.com/tmogeid/opencode-session-state](https://github.com/tmogeid/opencode-session-state)
+- **Seguimiento de problemas (Issues)**: [https://github.com/tmogeid/opencode-session-state/issues](https://github.com/tmogeid/opencode-session-state/issues)
+- **Versiones publicadas (Releases)**: [https://github.com/tmogeid/opencode-session-state/releases](https://github.com/tmogeid/opencode-session-state/releases)

@@ -5,10 +5,10 @@
  * Each session gets its own file, fully independent.
  */
 
-import { readFile, writeFile, unlink, mkdir, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { getLogger } from './logger.js';
+import { readFile, writeFile, unlink, mkdir, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { getLogger } from "./logger.js";
 
 /**
  * A single decision recorded during the session.
@@ -105,23 +105,97 @@ export interface SessionState {
   activeEpisodeId: string;
 }
 
-let episodeCounter = 0;
+const EPISODE_ID_PATTERN = /^ep(\d+)$/;
+
+/**
+ * Single source of truth for episode numbering: derives the highest
+ * `epN` number present in the given episodes.
+ */
+export function maxEpisodeNumber(episodes: Episode[]): number {
+  let max = 0;
+  for (const ep of episodes) {
+    const m = EPISODE_ID_PATTERN.exec(ep.id);
+    if (m) {
+      const n = Number.parseInt(m[1], 10);
+      if (Number.isSafeInteger(n) && n > max) max = n;
+    }
+  }
+  return max;
+}
+
+/**
+ * Derives the next unique episode id from the maximum `epN` present,
+ * with a collision guard (retries with higher numbers if taken).
+ */
+export function nextEpisodeId(episodes: Episode[]): string {
+  const taken = new Set(episodes.map((e) => e.id));
+  let n = maxEpisodeNumber(episodes) + 1;
+  let id = `ep${n}`;
+  while (taken.has(id)) {
+    n++;
+    id = `ep${n}`;
+  }
+  return id;
+}
+
+/**
+ * Defensive normalization applied when loading state: keeps the FIRST
+ * occurrence of each duplicated id, reassigns later duplicates to unique
+ * ids, and repoints `activeEpisodeId` to the correct (last, i.e. newest)
+ * episode when it matched a duplicated id. Idempotent: returns false and
+ * changes nothing when there are no duplicates.
+ */
+export function normalizeEpisodeIds(state: SessionState): boolean {
+  const originalActiveId = state.activeEpisodeId;
+  const originalIds = state.episodes.map((e) => e.id);
+  const seen = new Set<string>();
+  let max = maxEpisodeNumber(state.episodes);
+  const taken = new Set(originalIds);
+  let changed = false;
+  for (const ep of state.episodes) {
+    if (!seen.has(ep.id)) {
+      seen.add(ep.id);
+      continue;
+    }
+    let n = max + 1;
+    let newId = `ep${n}`;
+    while (taken.has(newId)) {
+      n++;
+      newId = `ep${n}`;
+    }
+    max = n;
+    taken.add(newId);
+    ep.id = newId;
+    seen.add(newId);
+    changed = true;
+  }
+  if (changed) {
+    const dupIndices: number[] = [];
+    originalIds.forEach((id, i) => {
+      if (id === originalActiveId) dupIndices.push(i);
+    });
+    if (dupIndices.length > 1) {
+      state.activeEpisodeId =
+        state.episodes[dupIndices[dupIndices.length - 1]].id;
+    }
+  }
+  return changed;
+}
 
 /**
  * Creates a new empty session state for the given session ID.
  */
 export function createEmptyState(sessionId: string): SessionState {
-  episodeCounter++;
-  const epId = `ep${episodeCounter}`;
+  const epId = nextEpisodeId([]);
   const now = new Date().toISOString();
   return {
     version: 1,
     sessionId,
     createdAt: now,
     updatedAt: now,
-    currentTask: '',
-    currentObjective: '',
-    mainTopic: '',
+    currentTask: "",
+    currentObjective: "",
+    mainTopic: "",
     decisions: [],
     pendingTasks: [],
     importantFiles: [],
@@ -132,11 +206,11 @@ export function createEmptyState(sessionId: string): SessionState {
     episodes: [
       {
         id: epId,
-        title: 'Inicio de sesión',
-        topic: '',
+        title: "Inicio de sesión",
+        topic: "",
         startedAt: now,
         endedAt: null,
-        summary: '',
+        summary: "",
         priority: 0,
       },
     ],
@@ -173,7 +247,7 @@ export class StateStore {
    */
   async read(sessionId: string): Promise<SessionState | null> {
     try {
-      const data = await readFile(this.filePath(sessionId), 'utf-8');
+      const data = await readFile(this.filePath(sessionId), "utf-8");
       return JSON.parse(data) as SessionState;
     } catch {
       return null;
@@ -187,7 +261,7 @@ export class StateStore {
     await mkdir(this.storageDir, { recursive: true });
     state.updatedAt = new Date().toISOString();
     const data = JSON.stringify(state, null, 2);
-    await writeFile(this.filePath(sessionId), data, 'utf-8');
+    await writeFile(this.filePath(sessionId), data, "utf-8");
   }
 
   /**
@@ -215,8 +289,8 @@ export class StateStore {
     try {
       const files = await readdir(this.storageDir);
       return files
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => f.replace(/\.json$/, ''));
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => f.replace(/\.json$/, ""));
     } catch {
       return [];
     }
@@ -234,7 +308,8 @@ export class StateStore {
     }
     // Sort by updatedAt descending (most recent first)
     states.sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
     return states;
   }
