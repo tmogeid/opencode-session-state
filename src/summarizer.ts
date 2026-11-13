@@ -413,6 +413,13 @@ function parseLLMResponse(
 		return {};
 	}
 
+	// Guard: provider error payloads (e.g. 429 bodies relayed as raw text) must
+	// never be merged into session state as a summarizer update.
+	if (parsed.type === "error" || typeof parsed.error === "object") {
+		log.warn("Summarizer response was a provider error payload; ignored");
+		return {};
+	}
+
 	// Merge episodes if present, with max episode enforcement
 	if (parsed.episodes && Array.isArray(parsed.episodes)) {
 		// Cap episodes at maxEpisodes

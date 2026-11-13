@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.1
+
+- feat: inyeccion de estado persistente en el prompt del sistema (`event.system`) con marcador `[session-state-manager:trusted-state]`, reemplazando cualquier bloque previo con dicho marcador en lugar de sintetizar turnos de usuario (`event.messages`).
+- feat: extraccion defensiva de `sessionId` en stream de eventos (`data.sessionID`, `data.info.id` y `properties`) y filtrado multimodal en hook `prompt` (`parts` con `type === "text"`).
+- feat: captura de respuestas del asistente mediante el evento `session.text.ended` del stream de eventos.
+- fix: blindaje en `src/summarizer.ts` para descartar payloads de error del proveedor (por ejemplo, cuerpos 429 reenviados como texto plano) sin fusionarlos en el estado de sesion.
+- fix: aplicacion anticipada de actualizaciones heuristicas antes de invocar el summarizer en `src/session-manager.ts`, evitando perdida de senales de tarea y objetivo cuando el summarizer consume los turnos pendientes en la misma llamada.
+- chore: bump de version a 2.0.1 en `package.json`, `plugin.json` e `index.js`.
+
 ## v2.0.0
 
 - feat: nuevo entrypoint v2 (`index.js`) adaptado a la API v2 de plugins (`@opencode-ai/plugin/v2/promise`).

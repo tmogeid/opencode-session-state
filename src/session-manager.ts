@@ -159,12 +159,15 @@ export class SessionManager {
       }
     }
 
+    // Heuristic updates first: fresh task/objective signals must never be
+    // dropped when the summarizer consumes the pending turns in the same call.
+    await this.applyHeuristicUpdates(state, cleanText);
+
     // Check if we should trigger the summarizer
     await this.maybeTriggerSummarizer(sessionId, live, state);
 
-    // If summarizer wasn't triggered, persist heuristic updates
+    // Persist unless the summarizer already did in this call
     if (live.pendingTurns.length > 0) {
-      await this.applyHeuristicUpdates(state, cleanText);
       await this.persist(sessionId, state);
     }
   }

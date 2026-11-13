@@ -30,11 +30,15 @@ import {
 } from "./dist/context-injector.js";
 import { createSessionStateTool } from "./dist/tools/session-state.js";
 
-const PLUGIN_VERSION = "2.0.0";
+const PLUGIN_VERSION = "2.0.1";
 const INJECT_METADATA_KEY = "session-state-injected";
 
 /** Session ID carried by a raw stream event (verified shapes). */
 function extractSessionId(ev) {
+  if (typeof ev?.data?.sessionID === "string" && ev.data.sessionID)
+    return ev.data.sessionID;
+  if (typeof ev?.data?.info?.id === "string" && ev.data.info.id)
+    return ev.data.info.id;
   const props = ev?.properties;
   if (!props || typeof props !== "object") return undefined;
   if (typeof props.sessionID === "string" && props.sessionID)
@@ -93,7 +97,13 @@ export default define({
           const text =
             typeof event.prompt?.text === "string"
               ? event.prompt.text.trim()
-              : "";
+              : Array.isArray(event.prompt?.parts)
+                ? event.prompt.parts
+                    .filter((part) => part?.type === "text")
+                    .map((part) => part.text ?? "")
+                    .join(String.fromCharCode(10))
+                    .trim()
+                : "";
           if (text) {
             await sessionManager.processUserMessage(sessionId, text);
             log.debug(`User message via prompt hook: ${sessionId}`);
@@ -104,61 +114,37 @@ export default define({
       }),
     );
 
-    // ── 5. messages.transform → session.hook("context") ───────────────────
-    // Injects the state at the TAIL of event.messages so cache churn only
-    // ever touches the end of the payload. v2 Message shape (verified):
-    // { role, content: [{ type: "text", text, metadata? }] }. The v1 helper
-    // cache-safe-injection.js targets the v1 {info, parts} shape, so the
-    // tag/strip/append semantics are re-expressed here for the v2 shape.
-    const injectedPart = (text) => ({
-      type: "text",
-      text,
-      metadata: { [INJECT_METADATA_KEY]: true },
-    });
-    const stripInjected = (messages) => {
-      for (let i = messages.length - 1; i >= 0; i -= 1) {
-        const message = messages[i];
-        if (!message || !Array.isArray(message.content)) continue;
-        const hadParts = message.content.length > 0;
-        message.content = message.content.filter(
-          (part) =>
-            !(
-              part &&
-              typeof part === "object" &&
-              part.metadata?.[INJECT_METADATA_KEY] === true
-            ),
-        );
-        if (hadParts && message.content.length === 0) messages.splice(i, 1);
-      }
-    };
+    // ── 5. Inject persistent state through the v2 context system parts ──
+    // Never fabricate a user message: that could be mistaken for a new goal.
+    const injectionMarker = "[session-state-manager:trusted-state]";
     registrations.push(
       await ctx.session.hook("context", async (event) => {
         if (!config.injectionEnabled) return;
         try {
-          const messages =
-            event && Array.isArray(event.messages) ? event.messages : null;
-          if (!messages || messages.length === 0) return;
           const sessionId = event.sessionID;
           if (!sessionId) return;
-          const state = sessionManager.getCachedState(sessionId);
-          if (!state) return;
+          const state =
+            sessionManager.getCachedState(sessionId) ??
+            (await sessionManager.getOrCreate(sessionId));
           const xml = formatStateAsXml(state);
           if (!xml) return;
-          // Dedupe: strip any previous injection before re-appending.
-          stripInjected(messages);
-          const lastMessage = messages[messages.length - 1];
-          if (
-            lastMessage &&
-            lastMessage.role === "user" &&
-            Array.isArray(lastMessage.content)
-          ) {
-            lastMessage.content.push(injectedPart(xml));
-          } else {
-            messages.push({ role: "user", content: [injectedPart(xml)] });
+          // v2.2.0 messages use provider-native content; inject stable system
+          // context rather than fabricating a user turn that could change topic.
+          for (let i = event.system.length - 1; i >= 0; i--) {
+            const part = event.system[i];
+            if (
+              part?.type === "text" &&
+              typeof part.text === "string" &&
+              part.text.startsWith(injectionMarker)
+            )
+              event.system.splice(i, 1);
           }
-          const estTokens = estimateInjectionTokens(xml);
+          event.system.push({
+            type: "text",
+            text: `${injectionMarker} ${xml}`,
+          });
           log.debug(
-            `State injected at payload tail — ~${estTokens} tokens, ${xml.length} chars`,
+            `State injected into system context — ~${estimateInjectionTokens(xml)} tokens`,
           );
         } catch (err) {
           hookError("context", err);
@@ -172,7 +158,9 @@ export default define({
         try {
           const sessionId = event.sessionID;
           if (!sessionId) return;
-          const state = sessionManager.getCachedState(sessionId);
+          const state =
+            sessionManager.getCachedState(sessionId) ??
+            (await sessionManager.getOrCreate(sessionId));
           if (!state) return;
           const contextXml = formatStateAsXml(state);
           if (contextXml) {
@@ -226,8 +214,18 @@ export default define({
           if (eventAbort.signal.aborted) break;
           const ev = raw?.event ?? raw;
           const type = ev?.type;
-          const sessionId = extractSessionId(ev);
+          const sessionId = extractSessionId(ev) ?? ev?.data?.sessionID;
           if (!type || !sessionId) continue;
+          if (type === "session.text.ended" && ev?.data?.text) {
+            try {
+              await sessionManager.processAssistantResponse(
+                sessionId,
+                ev.data.text,
+              );
+            } catch (err) {
+              hookError("assistant-text", err);
+            }
+          }
           try {
             switch (type) {
               case "session.created": {
